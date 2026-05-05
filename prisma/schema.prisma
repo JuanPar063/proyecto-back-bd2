@@ -1,0 +1,204 @@
+// ============================================================
+// Prisma schema — Plataforma SQL Judge
+// Modelo de dominio inicial para la Entrega 1.
+// Mantener en línea con docs/ARCHITECTURE.md (modelo de dominio).
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// USERS / AUTH (módulo Sofia)
+// ============================================================
+
+enum Role {
+  ADMIN
+  PROFESSOR
+  STUDENT
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  role         Role
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  coursesTaught   Course[]      @relation("CourseProfessor")
+  enrollments     Enrollment[]
+  challengesOwned Challenge[]   @relation("ChallengeAuthor")
+  submissions     Submission[]
+
+  @@index([role])
+  @@map("users")
+}
+
+// ============================================================
+// COURSES (módulo redelegado a Sofia)
+// ============================================================
+
+model Course {
+  id          String   @id @default(uuid())
+  name        String
+  code        String   @unique
+  period      String
+  groupName   String   @map("group")
+  professorId String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  professor   User         @relation("CourseProfessor", fields: [professorId], references: [id])
+  enrollments Enrollment[]
+  challenges  Challenge[]
+
+  @@index([professorId])
+  @@map("courses")
+}
+
+model Enrollment {
+  id         String   @id @default(uuid())
+  courseId   String
+  studentId  String
+  enrolledAt DateTime @default(now())
+
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, studentId])
+  @@index([studentId])
+  @@map("enrollments")
+}
+
+// ============================================================
+// CHALLENGES / SQL RETOS (módulo redelegado a Ruiz)
+// ============================================================
+
+enum ChallengeStatus {
+  draft
+  published
+  archived
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum DatabaseEngine {
+  postgresql
+  mysql
+  sqlite
+}
+
+model Challenge {
+  id             String          @id @default(uuid())
+  title          String
+  description    String          @db.Text
+  difficulty     Difficulty
+  tags           String[]
+  databaseEngine DatabaseEngine  @default(postgresql)
+  timeLimit      Int             @default(2000) // ms
+  status         ChallengeStatus @default(draft)
+  courseId       String
+  createdById    String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  course      Course        @relation(fields: [courseId], references: [id])
+  createdBy   User          @relation("ChallengeAuthor", fields: [createdById], references: [id])
+  schema      SchemaScript?
+  testDatasets TestDataset[]
+  submissions Submission[]
+
+  @@index([courseId, status])
+  @@index([status])
+  @@map("challenges")
+}
+
+// ============================================================
+// SCHEMAS / TEST DATA (módulo Ruiz)
+// ============================================================
+
+model SchemaScript {
+  id          String   @id @default(uuid())
+  challengeId String   @unique
+  ddl         String   @db.Text // CREATE TABLE ...
+  parsedTables Json?           // metadata de tablas/columnas detectadas
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  @@map("schema_scripts")
+}
+
+enum TestDatasetKind {
+  MANUAL_INSERT
+  GENERATOR_CONFIG
+}
+
+model TestDataset {
+  id            String          @id @default(uuid())
+  challengeId   String
+  name          String
+  kind          TestDatasetKind
+  // Si kind = MANUAL_INSERT -> sql contiene los INSERT
+  // Si kind = GENERATOR_CONFIG -> generatorConfig tiene la config JSON
+  sql           String?         @db.Text
+  generatorConfig Json?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  @@index([challengeId])
+  @@map("test_datasets")
+}
+
+// ============================================================
+// SUBMISSIONS (placeholder para Entrega 2 — solo entidad mínima)
+// ============================================================
+
+enum SubmissionStatus {
+  QUEUED
+  RUNNING
+  ACCEPTED
+  WRONG_ANSWER
+  SYNTAX_ERROR
+  TIME_LIMIT_EXCEEDED
+  RUNTIME_ERROR
+  OPTIMIZATION_REQUIRED
+}
+
+model Submission {
+  id              String           @id @default(uuid())
+  studentId       String
+  challengeId     String
+  engine          DatabaseEngine   @default(postgresql)
+  query           String           @db.Text
+  status          SubmissionStatus @default(QUEUED)
+  score           Int?
+  executionTimeMs Int?
+  errorMessage    String?          @db.Text
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  student   User      @relation(fields: [studentId], references: [id])
+  challenge Challenge @relation(fields: [challengeId], references: [id])
+
+  @@index([studentId, challengeId])
+  @@index([status])
+  @@map("submissions")
+}

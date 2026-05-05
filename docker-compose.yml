@@ -1,0 +1,96 @@
+# ============================================================
+# docker-compose.yml — Entrega 1
+# Servicios: API (NestJS), Worker SQL stub, PostgreSQL 16, Redis 7
+# ============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sqljudge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sqljudge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sqljudge_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-sqljudge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sqljudge}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - sqljudge
+
+  redis:
+    image: redis:7-alpine
+    container_name: sqljudge-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - sqljudge
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sqljudge-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sqljudge}:${POSTGRES_PASSWORD:-sqljudge_dev_password}@postgres:5432/${POSTGRES_DB:-sqljudge}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    # Aplica migraciones antes de arrancar la API
+    command: sh -c "npx prisma migrate deploy && node dist/main.js"
+    networks:
+      - sqljudge
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sqljudge-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sqljudge}:${POSTGRES_PASSWORD:-sqljudge_dev_password}@postgres:5432/${POSTGRES_DB:-sqljudge}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: ["node", "dist-worker/main.js"]
+    networks:
+      - sqljudge
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  sqljudge:
+    driver: bridge
