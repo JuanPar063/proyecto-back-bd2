@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ChallengeStatus, Role } from '@prisma/client';
+import { ChallengeStatus, Role, SubmissionStatus } from '@prisma/client';
 import { PrismaService } from '../../../shared/infrastructure/prisma/prisma.service';
 import {
   ChangeStatusDto,
@@ -14,12 +14,6 @@ import {
 
 /**
  * @responsable Ruiz Akle, Juan (redelegado por Pardo).
- *
- * Implementación inicial. Pendiente:
- *   [ ] Validar que el PROFESSOR sea dueño del Course al crear
- *   [ ] Endurecer reglas de transición y permisos en changeStatus
- *   [ ] Bloquear archive si hay submissions activas
- *   [ ] Listado para STUDENT: solo retos PUBLISHED de cursos donde está inscrito
  */
 @Injectable()
 export class ChallengesService {
@@ -79,14 +73,35 @@ export class ChallengesService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId: string, role: Role) {
+    const c = await this.getById(id);
+
+    if (role === Role.ADMIN) return c;
+
+    if (role === Role.PROFESSOR) {
+      if (c.createdById !== userId) throw new NotFoundException('Reto no encontrado');
+      return c;
+    }
+
+    // STUDENT: debe estar publicado y el alumno inscrito en el curso
+    if (c.status !== ChallengeStatus.published) {
+      throw new NotFoundException('Reto no encontrado');
+    }
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: { courseId_studentId: { courseId: c.courseId, studentId: userId } },
+    });
+    if (!enrollment) throw new NotFoundException('Reto no encontrado');
+    return c;
+  }
+
+  private async getById(id: string) {
     const c = await this.prisma.challenge.findUnique({ where: { id } });
     if (!c) throw new NotFoundException('Reto no encontrado');
     return c;
   }
 
   async update(id: string, professorId: string, dto: UpdateChallengeDto) {
-    const c = await this.findOne(id);
+    const c = await this.getById(id);
     if (c.createdById !== professorId) {
       throw new ForbiddenException('Solo el autor del reto puede editarlo');
     }
@@ -97,7 +112,7 @@ export class ChallengesService {
   }
 
   async changeStatus(id: string, professorId: string, dto: ChangeStatusDto) {
-    const c = await this.findOne(id);
+    const c = await this.getById(id);
     if (c.createdById !== professorId) {
       throw new ForbiddenException('Solo el autor del reto puede cambiar su estado');
     }
@@ -106,7 +121,19 @@ export class ChallengesService {
         `Transición inválida: ${c.status} -> ${dto.status}`,
       );
     }
-    // TODO(Ruiz): bloquear si dto.status === archived y hay submissions activas
+    if (dto.status === ChallengeStatus.archived) {
+      const active = await this.prisma.submission.count({
+        where: {
+          challengeId: id,
+          status: { in: [SubmissionStatus.QUEUED, SubmissionStatus.RUNNING] },
+        },
+      });
+      if (active > 0) {
+        throw new BadRequestException(
+          `No se puede archivar: hay ${active} submission(es) en proceso`,
+        );
+      }
+    }
     return this.prisma.challenge.update({
       where: { id },
       data: { status: dto.status },

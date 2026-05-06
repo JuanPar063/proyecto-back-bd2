@@ -48,9 +48,11 @@ export class ChallengesController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Detalle de reto' })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    // TODO(Ruiz): ocultar a STUDENT si status != published o no está inscrito
-    return this.challenges.findOne(id);
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() u: CurrentUserPayload,
+  ) {
+    return this.challenges.findOne(id, u.id, u.role);
   }
 
   @Patch(':id')
