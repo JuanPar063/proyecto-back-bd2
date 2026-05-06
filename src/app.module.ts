@@ -9,6 +9,9 @@ import { CoursesModule } from './modules/courses/courses.module';
 import { ChallengesModule } from './modules/challenges/challenges.module';
 import { SchemasModule } from './modules/schemas/schemas.module';
 import { TestDataModule } from './modules/test-data/test-data.module';
+import { SubmissionsModule } from './modules/submissions/submissions.module';
+import { BullModule } from '@nestjs/bullmq';
+import { ConfigService } from '@nestjs/config';
 
 @Module({
   imports: [
@@ -24,6 +27,17 @@ import { TestDataModule } from './modules/test-data/test-data.module';
     ChallengesModule,
     SchemasModule,
     TestDataModule,
+    SubmissionsModule,
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+        },
+      }),
+      inject: [ConfigService],
+    }),
   ],
 })
 export class AppModule {}
