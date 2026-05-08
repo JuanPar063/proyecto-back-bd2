@@ -1,44 +1,43 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { randomInt } from 'crypto';
+import { faker } from '@faker-js/faker';
 import {
   FieldConfigDto,
   TableGeneratorConfigDto,
 } from './dto/test-data.dto';
 
 /**
- * Generador de datos de prueba — versión inicial Entrega 1.
+ * Generador de datos de prueba.
  *
- * Soporta tipos básicos: integer, decimal, date, varchar, enum, foreign_key.
- * Respeta llaves foráneas referenciando IDs ya generados en otras tablas.
+ * @responsable Ruiz Akle, Juan.
  *
- * Pendiente para Entrega 2 (TODO Ruiz):
- *  - Casos borde configurables (valores extremos, listas, etc.)
- *  - Mayor variedad léxica para varchar (faker)
- *  - Validaciones cruzadas más finas
+ * Características:
+ *  - Tipos: integer, decimal, date, varchar, enum, foreign_key.
+ *  - varchar con presets semánticos (faker): name, email, city, etc.
+ *  - Casos borde: `fixedValue` (override), `includeExtremes` (garantiza min y
+ *    max en las primeras dos filas), `weights` (distribuciones no uniformes
+ *    para enum), `nullPercent` (porcentaje de nulos).
+ *  - Semilla determinística por tabla (`seed`) para corridas reproducibles.
+ *  - Orden topológico automático según FKs.
  */
 @Injectable()
 export class DataGeneratorService {
-  /**
-   * Genera el script INSERT respetando relaciones FK.
-   * Las tablas deben llegar ordenadas por dependencia (padre antes que hijo).
-   * Si no, hacemos un sort topológico simple basado en references.
-   */
   generate(tables: TableGeneratorConfigDto[]): { sql: string } {
     const ordered = this.topologicalSort(tables);
     const generatedIds: Record<string, (string | number)[]> = {};
     const lines: string[] = [];
 
     for (const table of ordered) {
-      const fieldNames = Object.keys(table.fields);
-      if (fieldNames.length === 0) {
-        throw new BadRequestException(`Tabla ${table.table} no tiene campos configurados`);
-      }
+      this.validateTableConfig(table);
 
+      // Semilla determinística por tabla. Sin seed, faker es no-determinístico.
+      if (table.seed != null) faker.seed(table.seed);
+
+      const fieldNames = Object.keys(table.fields);
       const ids: (string | number)[] = [];
 
       for (let i = 1; i <= table.rows; i++) {
         const values = fieldNames.map((name) =>
-          this.generateValue(name, table.fields[name], generatedIds, i),
+          this.generateValue(name, table.fields[name], generatedIds, i, table.rows),
         );
         lines.push(
           `INSERT INTO ${table.table} (${fieldNames.join(', ')}) VALUES (${values.join(', ')});`,
@@ -51,74 +50,213 @@ export class DataGeneratorService {
     return { sql: lines.join('\n') };
   }
 
-  // -------- helpers --------
+  // -------------------------------------------------------------------------
+  // Validación
+  // -------------------------------------------------------------------------
+
+  private validateTableConfig(table: TableGeneratorConfigDto): void {
+    if (Object.keys(table.fields).length === 0) {
+      throw new BadRequestException(`Tabla ${table.table} no tiene campos configurados`);
+    }
+    for (const [name, cfg] of Object.entries(table.fields)) {
+      this.validateField(table.table, name, cfg);
+    }
+  }
+
+  private validateField(tableName: string, name: string, cfg: FieldConfigDto): void {
+    const where = `${tableName}.${name}`;
+
+    if (cfg.nullPercent != null && (cfg.nullPercent < 0 || cfg.nullPercent > 100)) {
+      throw new BadRequestException(`nullPercent fuera de [0,100] en ${where}`);
+    }
+
+    if (cfg.min != null && cfg.max != null && cfg.min > cfg.max) {
+      throw new BadRequestException(`min>max en ${where}`);
+    }
+
+    if (cfg.type === 'date') {
+      if (!cfg.from || !cfg.to) {
+        throw new BadRequestException(`from/to requeridos para date en ${where}`);
+      }
+      const f = Date.parse(cfg.from);
+      const t = Date.parse(cfg.to);
+      if (isNaN(f) || isNaN(t)) {
+        throw new BadRequestException(`from/to inválidos en ${where}`);
+      }
+      if (f > t) {
+        throw new BadRequestException(`from > to en ${where}`);
+      }
+    }
+
+    if (cfg.type === 'enum') {
+      if (!cfg.values || cfg.values.length === 0) {
+        throw new BadRequestException(`values requerido para enum en ${where}`);
+      }
+      if (cfg.weights) {
+        if (cfg.weights.length !== cfg.values.length) {
+          throw new BadRequestException(
+            `weights.length (${cfg.weights.length}) != values.length (${cfg.values.length}) en ${where}`,
+          );
+        }
+        if (cfg.weights.some((w) => w < 0)) {
+          throw new BadRequestException(`weights debe ser no negativo en ${where}`);
+        }
+        if (cfg.weights.every((w) => w === 0)) {
+          throw new BadRequestException(`weights todos cero en ${where}`);
+        }
+      }
+    }
+
+    if (cfg.type === 'foreign_key' && !cfg.references) {
+      throw new BadRequestException(`references requerido para foreign_key en ${where}`);
+    }
+    if (cfg.references && !/^\w+\.\w+$/.test(cfg.references)) {
+      throw new BadRequestException(
+        `references debe tener formato "tabla.columna" en ${where}`,
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Generación de valores
+  // -------------------------------------------------------------------------
 
   private generateValue(
     fieldName: string,
     cfg: FieldConfigDto,
     generatedIds: Record<string, (string | number)[]>,
     rowIndex: number,
+    totalRows: number,
   ): string {
-    if (cfg.nullPercent && randomInt(0, 100) < cfg.nullPercent) {
+    // 1) fixedValue gana sobre todo lo demás (incluido nullPercent y extremos).
+    if (cfg.fixedValue !== undefined) {
+      return this.formatLiteral(cfg.fixedValue);
+    }
+
+    // 2) Slot de extremos: filas 1 y 2 producen min y max respectivamente.
+    const inExtremesSlot =
+      !!cfg.includeExtremes && totalRows >= 2 && (rowIndex === 1 || rowIndex === 2);
+
+    // 3) NULL aleatorio: nunca en slot de extremos (sería inútil para tests).
+    if (
+      !inExtremesSlot &&
+      cfg.nullPercent != null &&
+      Math.random() * 100 < cfg.nullPercent
+    ) {
       return 'NULL';
     }
 
     switch (cfg.type) {
-      case 'integer': {
-        const min = cfg.min ?? 0;
-        const max = cfg.max ?? 1000;
-        if (max < min) throw new BadRequestException(`min>max en ${fieldName}`);
-        return String(randomInt(min, max + 1));
-      }
-      case 'decimal': {
-        const min = cfg.min ?? 0;
-        const max = cfg.max ?? 1000;
-        const v = min + Math.random() * (max - min);
-        return v.toFixed(2);
-      }
-      case 'date': {
-        if (!cfg.from || !cfg.to) {
-          throw new BadRequestException(`from/to requeridos para date en ${fieldName}`);
-        }
-        const start = Date.parse(cfg.from);
-        const end = Date.parse(cfg.to);
-        if (isNaN(start) || isNaN(end) || end < start) {
-          throw new BadRequestException(`Rango de fechas inválido en ${fieldName}`);
-        }
-        const ts = start + Math.floor(Math.random() * (end - start));
-        return `'${new Date(ts).toISOString().slice(0, 10)}'`;
-      }
-      case 'varchar': {
-        const max = cfg.maxLength ?? 16;
-        const sample = `${fieldName}_${rowIndex}`.slice(0, max);
-        return `'${sample.replace(/'/g, "''")}'`;
-      }
-      case 'enum': {
-        if (!cfg.values || cfg.values.length === 0) {
-          throw new BadRequestException(`values requerido para enum en ${fieldName}`);
-        }
-        const v = cfg.values[randomInt(0, cfg.values.length)];
-        return `'${v.replace(/'/g, "''")}'`;
-      }
-      case 'foreign_key': {
-        if (!cfg.references) {
-          throw new BadRequestException(`references requerido para foreign_key en ${fieldName}`);
-        }
-        const pool = generatedIds[cfg.references];
-        if (!pool || pool.length === 0) {
-          throw new BadRequestException(
-            `FK ${fieldName} apunta a ${cfg.references}, pero esa tabla no se ha generado o está vacía`,
-          );
-        }
-        return String(pool[randomInt(0, pool.length)]);
+      case 'integer':
+        return this.genInteger(cfg, rowIndex, inExtremesSlot);
+      case 'decimal':
+        return this.genDecimal(cfg, rowIndex, inExtremesSlot);
+      case 'date':
+        return this.genDate(cfg, rowIndex, inExtremesSlot);
+      case 'varchar':
+        return this.genVarchar(cfg, fieldName, rowIndex);
+      case 'enum':
+        return this.genEnum(cfg);
+      case 'foreign_key':
+        return this.genFk(cfg, fieldName, generatedIds);
+      default: {
+        const _exhaustive: never = cfg.type;
+        throw new BadRequestException(`Tipo no soportado: ${_exhaustive}`);
       }
     }
   }
 
-  /**
-   * Orden topológico simple: una tabla X depende de Y si algún field de X tiene
-   * references "Y.col".
-   */
+  private formatLiteral(v: string | number | boolean): string {
+    if (typeof v === 'number') return String(v);
+    if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
+    return `'${String(v).replace(/'/g, "''")}'`;
+  }
+
+  private genInteger(cfg: FieldConfigDto, rowIndex: number, inExtremesSlot: boolean): string {
+    const min = Math.trunc(cfg.min ?? 0);
+    const max = Math.trunc(cfg.max ?? 1000);
+    if (inExtremesSlot) return String(rowIndex === 1 ? min : max);
+    return String(faker.number.int({ min, max }));
+  }
+
+  private genDecimal(cfg: FieldConfigDto, rowIndex: number, inExtremesSlot: boolean): string {
+    const min = cfg.min ?? 0;
+    const max = cfg.max ?? 1000;
+    if (inExtremesSlot) return (rowIndex === 1 ? min : max).toFixed(2);
+    return faker.number.float({ min, max, fractionDigits: 2 }).toFixed(2);
+  }
+
+  private genDate(cfg: FieldConfigDto, rowIndex: number, inExtremesSlot: boolean): string {
+    const start = Date.parse(cfg.from!);
+    const end = Date.parse(cfg.to!);
+    if (inExtremesSlot) {
+      const ts = rowIndex === 1 ? start : end;
+      return `'${new Date(ts).toISOString().slice(0, 10)}'`;
+    }
+    const date = faker.date.between({ from: new Date(start), to: new Date(end) });
+    return `'${date.toISOString().slice(0, 10)}'`;
+  }
+
+  private genVarchar(cfg: FieldConfigDto, fieldName: string, rowIndex: number): string {
+    const max = cfg.maxLength ?? 64;
+    let value: string;
+    switch (cfg.preset) {
+      case 'name':       value = faker.person.fullName(); break;
+      case 'firstName':  value = faker.person.firstName(); break;
+      case 'lastName':   value = faker.person.lastName(); break;
+      case 'email':      value = faker.internet.email(); break;
+      case 'phone':      value = faker.phone.number(); break;
+      case 'username':   value = faker.internet.username(); break;
+      case 'city':       value = faker.location.city(); break;
+      case 'country':    value = faker.location.country(); break;
+      case 'address':    value = faker.location.streetAddress(); break;
+      case 'company':    value = faker.company.name(); break;
+      case 'word':       value = faker.lorem.word(); break;
+      case 'sentence':   value = faker.lorem.sentence(); break;
+      case 'paragraph':  value = faker.lorem.paragraph(); break;
+      default:           value = `${fieldName}_${rowIndex}`;
+    }
+    return `'${value.slice(0, max).replace(/'/g, "''")}'`;
+  }
+
+  private genEnum(cfg: FieldConfigDto): string {
+    const values = cfg.values!;
+    let idx: number;
+    if (cfg.weights) {
+      const total = cfg.weights.reduce((a, b) => a + b, 0);
+      let r = Math.random() * total;
+      idx = cfg.weights.length - 1;
+      for (let i = 0; i < cfg.weights.length; i++) {
+        r -= cfg.weights[i];
+        if (r <= 0) {
+          idx = i;
+          break;
+        }
+      }
+    } else {
+      idx = faker.number.int({ min: 0, max: values.length - 1 });
+    }
+    return `'${values[idx].replace(/'/g, "''")}'`;
+  }
+
+  private genFk(
+    cfg: FieldConfigDto,
+    fieldName: string,
+    generatedIds: Record<string, (string | number)[]>,
+  ): string {
+    const pool = generatedIds[cfg.references!];
+    if (!pool || pool.length === 0) {
+      throw new BadRequestException(
+        `FK ${fieldName} apunta a ${cfg.references}, pero esa tabla no se ha generado o está vacía`,
+      );
+    }
+    return String(pool[faker.number.int({ min: 0, max: pool.length - 1 })]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Orden topológico
+  // -------------------------------------------------------------------------
+
   private topologicalSort(tables: TableGeneratorConfigDto[]): TableGeneratorConfigDto[] {
     const map = new Map(tables.map((t) => [t.table, t]));
     const visited = new Set<string>();

@@ -7,7 +7,13 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Role } from '@prisma/client';
 import { JwtAuthGuard } from '../../auth/infrastructure/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/infrastructure/guards/roles.guard';
@@ -31,6 +37,8 @@ export class TestDataController {
 
   @Get()
   @ApiOperation({ summary: 'Listar datasets del reto' })
+  @ApiParam({ name: 'challengeId', description: 'UUID del reto' })
+  @ApiResponse({ status: 200, description: 'Datasets ordenados por fecha desc' })
   list(@Param('challengeId', new ParseUUIDPipe()) challengeId: string) {
     return this.service.listForChallenge(challengeId);
   }
@@ -38,6 +46,10 @@ export class TestDataController {
   @Post('manual')
   @Roles(Role.PROFESSOR)
   @ApiOperation({ summary: 'Cargar dataset manual (script INSERT)' })
+  @ApiParam({ name: 'challengeId', description: 'UUID del reto' })
+  @ApiResponse({ status: 201, description: 'Dataset creado' })
+  @ApiResponse({ status: 403, description: 'No es el autor del reto' })
+  @ApiResponse({ status: 404, description: 'Reto no encontrado' })
   createManual(
     @Param('challengeId', new ParseUUIDPipe()) challengeId: string,
     @CurrentUser() u: CurrentUserPayload,
@@ -48,7 +60,19 @@ export class TestDataController {
 
   @Post('generate')
   @Roles(Role.PROFESSOR)
-  @ApiOperation({ summary: 'Generar dataset a partir de configuración' })
+  @ApiOperation({
+    summary: 'Generar dataset a partir de configuración',
+    description:
+      'Genera INSERTs respetando FKs. Soporta presets faker (name, city, email, etc.), distribuciones por pesos para enums, valores fijos, garantía de extremos (min/max en filas 1 y 2) y semilla determinística por tabla.',
+  })
+  @ApiParam({ name: 'challengeId', description: 'UUID del reto' })
+  @ApiResponse({ status: 201, description: 'Dataset generado y almacenado' })
+  @ApiResponse({
+    status: 400,
+    description: 'Configuración inválida (min>max, ciclo de FKs, weights mal alineados, etc.)',
+  })
+  @ApiResponse({ status: 403, description: 'No es el autor del reto' })
+  @ApiResponse({ status: 404, description: 'Reto no encontrado' })
   generate(
     @Param('challengeId', new ParseUUIDPipe()) challengeId: string,
     @CurrentUser() u: CurrentUserPayload,
@@ -59,7 +83,13 @@ export class TestDataController {
 
   @Post('preview')
   @Roles(Role.PROFESSOR)
-  @ApiOperation({ summary: 'Previsualizar el SQL generado sin guardarlo' })
+  @ApiOperation({
+    summary: 'Previsualizar el SQL generado sin guardarlo',
+    description:
+      'Útil para iterar la configuración del generador antes de persistir el dataset.',
+  })
+  @ApiResponse({ status: 200, description: 'SQL generado' })
+  @ApiResponse({ status: 400, description: 'Configuración inválida' })
   preview(@Body() dto: GenerateDatasetDto) {
     return this.service.preview(dto);
   }
