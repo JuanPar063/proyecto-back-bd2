@@ -43,6 +43,33 @@ modules/<context>/
 
 ---
 
+## 2.1. Casos de uso (Use Cases)
+
+Para mantener una separación más estricta de responsabilidades dentro de
+Clean Architecture, los flujos principales del negocio deben implementarse
+como casos de uso explícitos.
+
+Estructura sugerida:
+
+modules/<context>/
+├── application/
+│   ├── dto/
+│   ├── use-cases/
+│   │   ├── create-course.use-case.ts
+│   │   ├── publish-challenge.use-case.ts
+│   │   └── submit-sql.use-case.ts
+│   └── services/
+
+Reglas:
+- Un Use Case representa una acción concreta del negocio.
+- Los controllers llaman Use Cases o Services de aplicación.
+- Un Use Case no debe depender de Prisma directamente.
+- Los Use Cases pueden orquestar múltiples repositorios o puertos.
+- Mantener lógica de negocio fuera de controllers.
+
+
+---
+
 ## 3. DTOs
 
 - Usar `class-validator` para validar.
@@ -87,6 +114,34 @@ de class-validator). Los clientes deben tolerar ambos.
 
 ---
 
+## 5.1. Jobs y procesamiento asíncrono
+
+La plataforma usa BullMQ + Redis para procesamiento asíncrono.
+
+Convenciones:
+- Nombre de jobs:
+  `<context>.<action>`
+
+Ejemplos:
+- `submissions.evaluate`
+- `recommendations.generate`
+- `runner.cleanup`
+
+Payloads:
+- Los payloads deben ser tipados.
+- Evitar enviar objetos gigantes en cola.
+- Preferir IDs y cargar información desde DB dentro del worker.
+
+Reglas:
+- Los jobs nunca deben ejecutar lógica HTTP.
+- Los workers son responsables de:
+  - actualizar estados,
+  - manejar retries,
+  - persistir resultados,
+  - registrar errores.
+
+---
+
 ## 6. Errores
 
 - **Domain**: lanzar subclases de `DomainException` (ver
@@ -95,6 +150,36 @@ de class-validator). Los clientes deben tolerar ambos.
   `BadRequestException`, `NotFoundException`, `ForbiddenException`,
   `ConflictException`, etc. (built-in de Nest).
 - **No** lanzar `Error` genérico desde la capa de aplicación.
+
+---
+
+
+## 6.1. Seguridad SQL
+
+Toda consulta SQL enviada por estudiantes debe considerarse no confiable.
+
+Reglas obligatorias:
+- Nunca ejecutar SQL directamente desde requests HTTP.
+- Toda ejecución SQL debe pasar por Redis + Worker + Runner aislado.
+- Validar el AST SQL antes de ejecutar.
+- Bloquear:
+  - DROP
+  - DELETE
+  - UPDATE
+  - ALTER
+  - TRUNCATE
+  - CREATE USER
+  - GRANT
+  - REVOKE
+
+- Solo se permiten consultas SELECT en la evaluación automática.
+- Toda evaluación debe tener:
+  - timeout,
+  - límites de memoria,
+  - límites de CPU.
+
+- El Runner SQL nunca debe usar la base principal de la plataforma.
+- Cada evaluación debe ejecutarse en contenedores efímeros.
 
 ---
 
@@ -134,9 +219,87 @@ de class-validator). Los clientes deben tolerar ambos.
 
 ---
 
+## 9.1. Logging y trazabilidad
+
+Reglas:
+- No usar `console.log`.
+- Usar `Logger` de NestJS.
+- Los logs deben incluir:
+  - timestamp,
+  - contexto,
+  - nivel,
+  - correlationId.
+
+- Cada submission debe tener un `correlationId`
+  para rastrear:
+  API → Queue → Worker → Runner.
+
+Niveles sugeridos:
+- `log`: eventos normales.
+- `warn`: comportamiento inesperado recuperable.
+- `error`: fallos críticos.
+- `debug`: solo desarrollo local.
+
+Nunca loggear:
+- passwords,
+- refresh tokens,
+- JWTs completos.
+
+---
+
 ## 10. Variables de entorno
 
 - Todo lo que cambia entre entornos va a `.env`.
 - Cada nueva variable se añade a `.env.example` Y a la clase `EnvVars` en
   `shared/infrastructure/config/env.validation.ts` para que falle rápido si
   está mal configurada.
+
+---
+
+## 11. Transacciones
+
+Cuando una operación afecte múltiples entidades relacionadas,
+usar `prisma.$transaction`.
+
+Ejemplos:
+- Crear curso + enrollments.
+- Crear reto + esquema + dataset.
+- Guardar submission + resultado + recomendaciones.
+
+Evitar estados parcialmente persistidos.
+
+---
+
+## 12. Versionado API
+
+La API debe exponerse bajo:
+
+/api/v1
+
+Ejemplos:
+- `/api/v1/auth/login`
+- `/api/v1/courses`
+- `/api/v1/challenges`
+
+Cambios incompatibles deben crear nueva versión.
+
+---
+
+## 13. Paginación
+
+Endpoints listados deben soportar:
+
+?page=1&limit=10
+
+Formato estándar:
+
+```json
+{
+  "data": [],
+  "meta": {
+    "page": 1,
+    "limit": 10,
+    "total": 100,
+    "totalPages": 10
+  }
+}
