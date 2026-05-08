@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -10,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Role } from '@prisma/client';
+
 import { JwtAuthGuard } from '../../auth/infrastructure/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/infrastructure/guards/roles.guard';
 import { Roles } from '../../auth/infrastructure/decorators/roles.decorator';
@@ -17,8 +19,13 @@ import {
   CurrentUser,
   CurrentUserPayload,
 } from '../../auth/infrastructure/decorators/current-user.decorator';
+
 import { CoursesService } from '../application/courses.service';
-import { CreateCourseDto, UpdateCourseDto } from '../application/dto/course.dto';
+import {
+  CreateCourseDto,
+  EnrollStudentDto,
+  UpdateCourseDto,
+} from '../application/dto/course.dto';
 
 @ApiTags('courses')
 @ApiBearerAuth()
@@ -42,9 +49,11 @@ export class CoursesController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Detalle del curso' })
-  findOne(@Param('id', new ParseUUIDPipe()) id: string) {
-    // TODO(Sofia): validar que el caller (STUDENT) esté inscrito
-    return this.courses.findOne(id);
+  findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() u: CurrentUserPayload,
+  ) {
+    return this.courses.findOne(id, u.id, u.role);
   }
 
   @Patch(':id')
@@ -68,7 +77,34 @@ export class CoursesController {
     return this.courses.archive(id, u.id);
   }
 
-  // TODO(Sofia): POST /courses/:id/enrollments  -> inscribir estudiante (PROFESSOR)
-  // TODO(Sofia): DELETE /courses/:id/enrollments/:studentId
-  // TODO(Sofia): GET /courses/:id/students -> listar inscritos
+  @Post(':id/enrollments')
+  @Roles(Role.PROFESSOR)
+  @ApiOperation({ summary: 'Inscribir estudiante en un curso' })
+  enrollStudent(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() u: CurrentUserPayload,
+    @Body() dto: EnrollStudentDto,
+  ) {
+    return this.courses.enrollStudent(id, u.id, dto.studentEmail);
+  }
+
+  @Delete(':id/enrollments/:studentId')
+  @Roles(Role.PROFESSOR)
+  @ApiOperation({ summary: 'Desinscribir estudiante de un curso' })
+  unenrollStudent(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('studentId', new ParseUUIDPipe()) studentId: string,
+    @CurrentUser() u: CurrentUserPayload,
+  ) {
+    return this.courses.unenrollStudent(id, u.id, studentId);
+  }
+
+  @Get(':id/students')
+  @ApiOperation({ summary: 'Listar estudiantes inscritos en un curso' })
+  listStudents(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @CurrentUser() u: CurrentUserPayload,
+  ) {
+    return this.courses.listStudents(id, u.id, u.role);
+  }
 }
