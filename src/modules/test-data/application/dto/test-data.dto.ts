@@ -1,8 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
+  IsNumber,
   IsObject,
   IsOptional,
   IsString,
@@ -29,6 +31,41 @@ export class CreateManualDatasetDto {
 
 // ----------- Generador -----------
 
+/**
+ * Presets semánticos para columnas varchar. Usan @faker-js/faker.
+ * Si no se especifica preset, el generador usa el fallback `fieldName_rowIndex`.
+ */
+export type VarcharPreset =
+  | 'name'
+  | 'firstName'
+  | 'lastName'
+  | 'email'
+  | 'phone'
+  | 'username'
+  | 'city'
+  | 'country'
+  | 'address'
+  | 'company'
+  | 'word'
+  | 'sentence'
+  | 'paragraph';
+
+const VARCHAR_PRESETS: VarcharPreset[] = [
+  'name',
+  'firstName',
+  'lastName',
+  'email',
+  'phone',
+  'username',
+  'city',
+  'country',
+  'address',
+  'company',
+  'word',
+  'sentence',
+  'paragraph',
+];
+
 export class FieldConfigDto {
   @ApiProperty({
     enum: ['integer', 'decimal', 'date', 'varchar', 'enum', 'foreign_key'],
@@ -37,15 +74,28 @@ export class FieldConfigDto {
   type!: 'integer' | 'decimal' | 'date' | 'varchar' | 'enum' | 'foreign_key';
 
   // numeric
-  @ApiPropertyOptional() @IsOptional() @IsInt() min?: number;
-  @ApiPropertyOptional() @IsOptional() @IsInt() max?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() min?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() max?: number;
 
   // date
   @ApiPropertyOptional({ example: '2026-01-01' }) @IsOptional() @IsString() from?: string;
   @ApiPropertyOptional({ example: '2026-12-31' }) @IsOptional() @IsString() to?: string;
 
   // varchar
-  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) maxLength?: number;
+  @ApiPropertyOptional({ description: 'Longitud máxima del valor generado (truncado al final)' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxLength?: number;
+
+  @ApiPropertyOptional({
+    enum: VARCHAR_PRESETS,
+    description:
+      'Preset semántico para varchar usando faker. Sin preset, se usa fallback simple.',
+  })
+  @IsOptional()
+  @IsEnum(VARCHAR_PRESETS)
+  preset?: VarcharPreset;
 
   // enum
   @ApiPropertyOptional({ type: [String] })
@@ -53,6 +103,16 @@ export class FieldConfigDto {
   @IsArray()
   @IsString({ each: true })
   values?: string[];
+
+  @ApiPropertyOptional({
+    type: [Number],
+    description:
+      'Pesos relativos por valor (paralelo a `values`). Permite distribuciones no uniformes.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsNumber({}, { each: true })
+  weights?: number[];
 
   // foreign_key — formato "tabla.columna"
   @ApiPropertyOptional({ example: 'customers.id' })
@@ -65,6 +125,23 @@ export class FieldConfigDto {
   @IsInt()
   @Min(0)
   nullPercent?: number;
+
+  // ---- casos borde ----
+
+  @ApiPropertyOptional({
+    description:
+      'Valor fijo que sobreescribe la generación aleatoria. Útil para columnas constantes.',
+  })
+  @IsOptional()
+  fixedValue?: string | number | boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Si es true, garantiza que la primera fila tenga el valor mínimo y la segunda el máximo (integer/decimal/date).',
+  })
+  @IsOptional()
+  @IsBoolean()
+  includeExtremes?: boolean;
 }
 
 export class TableGeneratorConfigDto {
@@ -84,6 +161,13 @@ export class TableGeneratorConfigDto {
   })
   @IsObject()
   fields!: Record<string, FieldConfigDto>;
+
+  @ApiPropertyOptional({
+    description: 'Semilla determinística (entero). Si se fija, las corridas son reproducibles.',
+  })
+  @IsOptional()
+  @IsInt()
+  seed?: number;
 }
 
 export class GenerateDatasetDto {

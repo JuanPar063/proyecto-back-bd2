@@ -18,7 +18,6 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npx prisma generate
 RUN npm run build
-
 # ---------- Etapa 3: runtime ----------
 FROM node:20-alpine AS runtime
 WORKDIR /app

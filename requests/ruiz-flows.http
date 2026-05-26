@@ -1,0 +1,288 @@
+### -----------------------------------------------------------------------
+### Colección REST — flujos del módulo de RUIZ AKLE, JUAN
+### Cubre: challenges, schemas, test-data y demo end-to-end.
+### Compatible con VS Code REST Client e importable a Postman.
+###
+### Cómo usar:
+###   1) docker compose up -d
+###   2) Ejecutar la primera petición (login admin) para obtener un token.
+###   3) Copiar el accessToken al @adminToken arriba.
+###   4) Ejecutar las demás secciones en orden.
+### -----------------------------------------------------------------------
+
+@host = http://localhost:3000/api
+
+# Tokens (rellenar tras login)
+@adminToken = REEMPLAZAR_ADMIN_TOKEN
+@profToken  = REEMPLAZAR_PROFESSOR_TOKEN
+@studToken  = REEMPLAZAR_STUDENT_TOKEN
+
+# IDs (rellenar a partir de respuestas)
+@profId      = REEMPLAZAR_PROFESSOR_ID
+@studId      = REEMPLAZAR_STUDENT_ID
+@courseId    = REEMPLAZAR_COURSE_ID
+@challengeId = REEMPLAZAR_CHALLENGE_ID
+
+### =======================================================================
+### 1. AUTH — login con el ADMIN seedeado
+### =======================================================================
+
+### 1.1 Login ADMIN (usar el accessToken como @adminToken)
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@sqljudge.local",
+  "password": "Admin123!"
+}
+
+### 1.2 Crear PROFESSOR (ADMIN-only) — guardar id como @profId
+POST {{host}}/users
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "email": "prof.demo@sqljudge.local",
+  "password": "Profe123!",
+  "fullName": "Profesora Demo",
+  "role": "PROFESSOR"
+}
+
+### 1.3 Crear STUDENT (ADMIN-only) — guardar id como @studId
+POST {{host}}/users
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "email": "stud.demo@sqljudge.local",
+  "password": "Stud123!",
+  "fullName": "Estudiante Demo",
+  "role": "STUDENT"
+}
+
+### 1.4 Login PROFESSOR (usar accessToken como @profToken)
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "prof.demo@sqljudge.local",
+  "password": "Profe123!"
+}
+
+### 1.5 Login STUDENT (usar accessToken como @studToken)
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "stud.demo@sqljudge.local",
+  "password": "Stud123!"
+}
+
+### =======================================================================
+### 2. DEMO end-to-end — atajo para sustentación
+### Crea curso + reto publicado + esquema + dataset en una sola llamada.
+### =======================================================================
+
+### 2.1 Demo customers/orders (PROFESSOR)
+POST {{host}}/demo/customers-orders
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "courseName": "Demo BD2 2026",
+  "courseCode": "DEMO-2026-1",
+  "customerCount": 100,
+  "orderCount": 1000
+}
+
+### =======================================================================
+### 3. FLUJO MANUAL — desde cero (alternativa al demo)
+### =======================================================================
+
+### 3.1 Crear curso (PROFESSOR) — guardar id como @courseId
+POST {{host}}/courses
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "name": "Bases de Datos II",
+  "code": "BD2-2026-1",
+  "period": "2026-1",
+  "group": "1"
+}
+
+### 3.2 Inscribir STUDENT en el curso (PROFESSOR del curso)
+POST {{host}}/courses/{{courseId}}/enrollments
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "studentId": "{{studId}}"
+}
+
+### 3.3 Crear reto SQL en draft — guardar id como @challengeId
+POST {{host}}/challenges
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "title": "Clientes con más de 3 compras",
+  "description": "Construya una consulta SQL que retorne los clientes con más de 3 compras, ordenados por número de compras descendente.",
+  "difficulty": "MEDIUM",
+  "tags": ["SELECT", "JOIN", "GROUP BY", "HAVING"],
+  "databaseEngine": "postgresql",
+  "timeLimit": 2000,
+  "courseId": "{{courseId}}"
+}
+
+### 3.4 Cargar esquema DDL (solo CREATE TABLE)
+PUT {{host}}/challenges/{{challengeId}}/schema
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "ddl": "CREATE TABLE customers (id SERIAL PRIMARY KEY, name VARCHAR(80) NOT NULL, city VARCHAR(60), tier VARCHAR(16), created_at DATE NOT NULL); CREATE TABLE orders (id SERIAL PRIMARY KEY, customer_id INT REFERENCES customers(id) NOT NULL, total DECIMAL(10,2) NOT NULL, status VARCHAR(16) NOT NULL, currency VARCHAR(3) NOT NULL, created_at DATE NOT NULL);"
+}
+
+### 3.5 Consultar esquema cargado (incluye parsedTables con metadata rica)
+GET {{host}}/challenges/{{challengeId}}/schema
+Authorization: Bearer {{profToken}}
+
+### 3.6 Preview del SQL generado (sin persistir)
+POST {{host}}/challenges/{{challengeId}}/test-data/preview
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "name": "preview_demo",
+  "tables": [
+    {
+      "table": "customers",
+      "rows": 5,
+      "seed": 1,
+      "fields": {
+        "name": { "type": "varchar", "preset": "name", "maxLength": 80 },
+        "city": { "type": "varchar", "preset": "city" },
+        "tier": { "type": "enum", "values": ["BRONZE", "SILVER", "GOLD"], "weights": [50, 30, 20] },
+        "created_at": { "type": "date", "from": "2025-01-01", "to": "2026-12-31" }
+      }
+    }
+  ]
+}
+
+### 3.7 Generar dataset (con casos borde + faker)
+POST {{host}}/challenges/{{challengeId}}/test-data/generate
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "name": "dataset_principal",
+  "tables": [
+    {
+      "table": "customers",
+      "rows": 100,
+      "seed": 1,
+      "fields": {
+        "name": { "type": "varchar", "preset": "name", "maxLength": 80 },
+        "city": { "type": "varchar", "preset": "city", "maxLength": 60 },
+        "tier": { "type": "enum", "values": ["BRONZE", "SILVER", "GOLD"], "weights": [50, 30, 20] },
+        "created_at": { "type": "date", "from": "2025-01-01", "to": "2026-12-31" }
+      }
+    },
+    {
+      "table": "orders",
+      "rows": 1000,
+      "seed": 2,
+      "fields": {
+        "customer_id": { "type": "foreign_key", "references": "customers.id" },
+        "total": { "type": "decimal", "min": 10000, "max": 5000000, "includeExtremes": true },
+        "status": { "type": "enum", "values": ["PENDING", "PAID", "CANCELLED"], "weights": [10, 80, 10] },
+        "currency": { "type": "varchar", "fixedValue": "COP" },
+        "created_at": { "type": "date", "from": "2026-01-01", "to": "2026-12-31" }
+      }
+    }
+  ]
+}
+
+### 3.8 Listar datasets del reto
+GET {{host}}/challenges/{{challengeId}}/test-data
+Authorization: Bearer {{profToken}}
+
+### 3.9 Publicar reto (draft → published)
+PATCH {{host}}/challenges/{{challengeId}}/status
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{ "status": "published" }
+
+### =======================================================================
+### 4. STUDENT — vista filtrada por rol
+### =======================================================================
+
+### 4.1 STUDENT lista retos (solo published de cursos donde está inscrito)
+GET {{host}}/challenges
+Authorization: Bearer {{studToken}}
+
+### 4.2 STUDENT ve detalle del reto publicado (200)
+GET {{host}}/challenges/{{challengeId}}
+Authorization: Bearer {{studToken}}
+
+### =======================================================================
+### 5. CASOS BORDE / VALIDACIONES (deben fallar con 400/403/404)
+### =======================================================================
+
+### 5.1 STUDENT intenta ver un reto NO publicado → 404 (no leakea existencia)
+###     Crear primero un reto en draft con 3.3 sin publicarlo, copiar su id.
+GET {{host}}/challenges/REEMPLAZAR_DRAFT_CHALLENGE_ID
+Authorization: Bearer {{studToken}}
+
+### 5.2 PROFESSOR intenta archivar reto con submissions activas → 400
+PATCH {{host}}/challenges/{{challengeId}}/status
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{ "status": "archived" }
+
+### 5.3 DDL prohibido (DROP) → 400
+PUT {{host}}/challenges/{{challengeId}}/schema
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{ "ddl": "DROP TABLE customers;" }
+
+### 5.4 DDL prohibido (ALTER) → 400
+PUT {{host}}/challenges/{{challengeId}}/schema
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{ "ddl": "ALTER TABLE customers ADD COLUMN x INT;" }
+
+### 5.5 Generador con min>max → 400
+POST {{host}}/challenges/{{challengeId}}/test-data/preview
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "name": "edge_case",
+  "tables": [{
+    "table": "x",
+    "rows": 1,
+    "fields": { "v": { "type": "integer", "min": 100, "max": 10 } }
+  }]
+}
+
+### 5.6 Generador con weights mal alineado → 400
+POST {{host}}/challenges/{{challengeId}}/test-data/preview
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "name": "edge_case",
+  "tables": [{
+    "table": "x",
+    "rows": 1,
+    "fields": {
+      "v": { "type": "enum", "values": ["A", "B"], "weights": [1, 2, 3] }
+    }
+  }]
+}

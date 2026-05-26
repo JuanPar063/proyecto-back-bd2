@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateCourseDto {
   @ApiProperty({ example: 'Bases de Datos II' })
@@ -36,3 +36,13 @@ export class UpdateCourseDto {
   @IsString()
   group?: string;
 }
+
+export class EnrollStudentDto {
+  @ApiProperty({
+    example: 'estudiante@test.com',
+    description: 'Correo del estudiante que se desea inscribir en el curso',
+  })
+  @IsEmail()
+  studentEmail!: string;
+}
+
