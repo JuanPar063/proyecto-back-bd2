@@ -33,9 +33,9 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  coursesTaught   Course[]      @relation("CourseProfessor")
+  coursesTaught   Course[]     @relation("CourseProfessor")
   enrollments     Enrollment[]
-  challengesOwned Challenge[]   @relation("ChallengeAuthor")
+  challengesOwned Challenge[]  @relation("ChallengeAuthor")
   submissions     Submission[]
 
   @@index([role])
@@ -115,11 +115,12 @@ model Challenge {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
-  course      Course        @relation(fields: [courseId], references: [id])
-  createdBy   User          @relation("ChallengeAuthor", fields: [createdById], references: [id])
-  schema      SchemaScript?
-  testDatasets TestDataset[]
-  submissions Submission[]
+  course         Course          @relation(fields: [courseId], references: [id])
+  createdBy      User            @relation("ChallengeAuthor", fields: [createdById], references: [id])
+  schema         SchemaScript?
+  testDatasets   TestDataset[]
+  submissions    Submission[]
+  expectedResult ExpectedResult?
 
   @@index([courseId, status])
   @@index([status])
@@ -131,13 +132,13 @@ model Challenge {
 // ============================================================
 
 model SchemaScript {
-  id          String   @id @default(uuid())
-  challengeId String   @unique
-  ddl         String   @db.Text // CREATE TABLE ...
-  parsedTables Json?           // metadata de tablas/columnas detectadas
-  version     Int      @default(1)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(uuid())
+  challengeId  String   @unique
+  ddl          String   @db.Text // CREATE TABLE ...
+  parsedTables Json? // metadata de tablas/columnas detectadas
+  version      Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
 
@@ -150,16 +151,16 @@ enum TestDatasetKind {
 }
 
 model TestDataset {
-  id            String          @id @default(uuid())
-  challengeId   String
-  name          String
-  kind          TestDatasetKind
+  id              String          @id @default(uuid())
+  challengeId     String
+  name            String
+  kind            TestDatasetKind
   // Si kind = MANUAL_INSERT -> sql contiene los INSERT
   // Si kind = GENERATOR_CONFIG -> generatorConfig tiene la config JSON
-  sql           String?         @db.Text
+  sql             String?         @db.Text
   generatorConfig Json?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
 
@@ -168,7 +169,13 @@ model TestDataset {
 }
 
 // ============================================================
-// SUBMISSIONS (placeholder para Entrega 2 — solo entidad mínima)
+// SUBMISSIONS (Entrega 2 — módulo Ruiz)
+// Extiende la entidad mínima de Entrega 1 con:
+//   - engineVersion: versión del motor usado por el Runner.
+//   - runnerMetadata: payload técnico devuelto por el Runner (rows,
+//     columns, explainPlan, etc.). Documentado en docs/CONTRACTS.md.
+//   - feedback: explicación enriquecida (humana) que produce el
+//     comparador + el asistente IA y se muestra al estudiante.
 // ============================================================
 
 enum SubmissionStatus {
@@ -187,11 +194,14 @@ model Submission {
   studentId       String
   challengeId     String
   engine          DatabaseEngine   @default(postgresql)
+  engineVersion   String?
   query           String           @db.Text
   status          SubmissionStatus @default(QUEUED)
   score           Int?
   executionTimeMs Int?
   errorMessage    String?          @db.Text
+  feedback        String?          @db.Text
+  runnerMetadata  Json?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -201,4 +211,28 @@ model Submission {
   @@index([studentId, challengeId])
   @@index([status])
   @@map("submissions")
+}
+
+// ============================================================
+// EXPECTED RESULT (Entrega 2 — módulo Ruiz)
+// Resultado de referencia (columnas + filas) que el comparador
+// usa para decidir ACCEPTED / WRONG_ANSWER. Uno por reto, lo
+// carga el profesor cuando publica el reto.
+//   - orderSensitive: si true, la comparación respeta orden de filas.
+//   - floatTolerance: tolerancia absoluta para comparar decimales.
+// ============================================================
+
+model ExpectedResult {
+  id             String   @id @default(uuid())
+  challengeId    String   @unique
+  columns        String[]
+  rows           Json
+  orderSensitive Boolean  @default(false)
+  floatTolerance Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  @@map("expected_results")
 }
