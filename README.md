@@ -164,9 +164,37 @@ Ver [`Reparticion_Tareas_Entrega1.docx`](./Reparticion_Tareas_Entrega1.docx).
 - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — diagramas y modelo de dominio
 - [`docs/CONVENTIONS.md`](./docs/CONVENTIONS.md) — convenciones de código
 
-## 9. Próximos pasos (Entrega 2)
 
-- Submissions reales y flujo end-to-end de evaluación
-- Runner SQL en Docker con límites de memoria/CPU
-- Asistente inteligente (reglas + IA generativa)
-- Reportes y leaderboard
+## 9. Reports and Leaderboard
+
+The reports module exposes academic metrics for professors and administrators.
+
+### Endpoints
+
+- GET /reports/students/:id
+- GET /reports/challenges/:id
+- GET /reports/courses/:id
+- GET /reports/leaderboard?courseId=&evaluationId=
+
+### Metrics
+
+Student report:
+- solved challenges,
+- total submissions,
+- average score,
+- best execution time.
+
+Challenge report:
+- success rate,
+- best execution time,
+- real difficulty.
+
+Course report:
+- course average,
+- top 5 students,
+- hardest challenges.
+
+Leaderboard:
+- aggregated score ranking by course or evaluation.
+
+Heavy queries are cached in Redis with a short TTL of 60 seconds.
