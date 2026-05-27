@@ -94,7 +94,7 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
             });
             if (resp.ok) {
                 const ai = await resp.json();
-                aiQualityScore = ai.qualityScore ?? null;
+                aiQualityScore = ai['qualityScore'] ?? null;
                 mainLogger.info('Asistente IA respondió ✓');
             }
             else {

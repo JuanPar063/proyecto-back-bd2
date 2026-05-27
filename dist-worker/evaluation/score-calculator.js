@@ -10,7 +10,7 @@ class ScoreCalculatorService {
         const correctnessScore = this.calculateCorrectness(context.correctness);
         const timeScore = this.calculateTimeScore(context.executionTimeMs, context.timeLimit);
         const ai = context.aiQualityScore ?? {};
-        const practicesScore = ai.goodPractices != null
+        const practicesScore = (ai.goodPractices != null)
             ? clamp(ai.goodPractices, 0, 10)
             : this.calculateSqlPractices(context.studentQuery);
         const clarityScore = clamp(ai.clarity ?? 0, 0, 5);
