@@ -97,6 +97,7 @@ export class ReportsService {
             studentId: true,
             status: true,
             score: true,
+            student: { select: { fullName: true } },
           },
         },
       },
@@ -139,12 +140,18 @@ export class ReportsService {
 
     const studentMap = new Map<
       string,
-      { totalScore: number; count: number; solvedChallenges: Set<string> }
+      {
+        fullName: string;
+        totalScore: number;
+        count: number;
+        solvedChallenges: Set<string>;
+      }
     >();
 
     for (const submission of allSubmissions) {
       if (!studentMap.has(submission.studentId)) {
         studentMap.set(submission.studentId, {
+          fullName: submission.student?.fullName ?? '',
           totalScore: 0,
           count: 0,
           solvedChallenges: new Set<string>(),
@@ -166,7 +173,7 @@ export class ReportsService {
     const topStudents = Array.from(studentMap.entries())
       .map(([studentId, value]) => ({
         studentId,
-        fullName: '',
+        fullName: value.fullName,
         averageScore:
           value.count > 0 ? value.totalScore / value.count : 0,
         solvedChallenges: value.solvedChallenges.size,
@@ -199,12 +206,14 @@ export class ReportsService {
         score: true,
         executionTimeMs: true,
         challengeId: true,
+        student: { select: { fullName: true } },
       },
     });
 
     const studentMap = new Map<
       string,
       {
+        fullName: string;
         totalScore: number;
         totalSubmissions: number;
         solvedChallenges: Set<string>;
@@ -215,6 +224,7 @@ export class ReportsService {
     for (const submission of submissions) {
       if (!studentMap.has(submission.studentId)) {
         studentMap.set(submission.studentId, {
+          fullName: submission.student?.fullName ?? '',
           totalScore: 0,
           totalSubmissions: 0,
           solvedChallenges: new Set<string>(),
@@ -245,7 +255,7 @@ export class ReportsService {
     const entries = Array.from(studentMap.entries())
       .map(([studentId, value]) => ({
         studentId,
-        fullName: '',
+        fullName: value.fullName,
         totalScore: value.totalScore,
         solvedChallenges: value.solvedChallenges.size,
         totalSubmissions: value.totalSubmissions,

@@ -9,6 +9,7 @@ import { RECOMMENDATION_REPOSITORY } from './domain/recommendation.repository';
 import { PrismaRecommendationRepository } from './infrastructure/prisma-recommendation.repository';
 import { StubLlmClient } from './infrastructure/stub-llm.client';
 import { AiAssistantController } from './presentation/ai-assistant.controller';
+import { AiAssistantInternalController } from './presentation/ai-assistant-internal.controller';
 
 /**
  * Módulo del asistente inteligente (Pardo, Entrega 2).
@@ -26,7 +27,7 @@ import { AiAssistantController } from './presentation/ai-assistant.controller';
  * que otros módulos —y eventualmente el worker, vía adaptador— lo consuman.
  */
 @Module({
-  controllers: [AiAssistantController],
+  controllers: [AiAssistantController, AiAssistantInternalController],
   providers: [
     RuleEngineService,
     RecommendationBuilderService,

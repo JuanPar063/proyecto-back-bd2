@@ -170,16 +170,17 @@ const worker = new Worker<SubmissionJobData>(
       );
 
       // FASE 6.5: Hook al asistente IA (P1 — graceful degradation)
-      // Si Pardo aún no entregó su módulo, seguimos sin él (no bloquea la evaluación).
+      // Si el módulo IA no está disponible, seguimos sin él (no bloquea la evaluación).
       let aiQualityScore: {
         goodPractices?: number;
         clarity?: number;
         improvement?: number;
       } | null = null;
+      let aiWarnings: Array<{ ruleId: string; severity: string; message: string }> = [];
 
       try {
         const apiUrl = process.env.API_URL ?? 'http://api:3000/api';
-        const resp = await fetch(`${apiUrl}/ai-assistant/analyze`, {
+        const resp = await fetch(`${apiUrl}/ai-assistant/internal/analyze`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -193,7 +194,8 @@ const worker = new Worker<SubmissionJobData>(
         if (resp.ok) {
           const ai = await resp.json() as Record<string, any>;
           aiQualityScore = (ai['qualityScore'] as typeof aiQualityScore) ?? null;
-          mainLogger.info('Asistente IA respondió ✓');
+          aiWarnings = (ai['warnings'] as typeof aiWarnings) ?? [];
+          mainLogger.info(`Asistente IA respondió ✓ (${aiWarnings.length} warning(s))`);
         } else {
           mainLogger.warn(`Asistente IA respondió ${resp.status} — continuando sin IA`);
         }
@@ -218,8 +220,14 @@ const worker = new Worker<SubmissionJobData>(
       );
 
       // FASE 8: Determinar status final
+      // Si la query es ACCEPTED por el comparador pero el motor de reglas IA
+      // levantó al menos una warning `critical`, marcamos OPTIMIZATION_REQUIRED:
+      // técnicamente correcta pero con mejoras urgentes (SLOW_QUERY, CROSS_JOIN, etc.).
+      const hasCriticalWarning = aiWarnings.some((w) => w.severity === 'critical');
       const finalStatus = comparisonResult.isCorrect
-        ? SubmissionStatus.ACCEPTED
+        ? hasCriticalWarning
+          ? SubmissionStatus.OPTIMIZATION_REQUIRED
+          : SubmissionStatus.ACCEPTED
         : sqlResult.executionTimeMs > evaluationContext.challengeTimeLimit
           ? SubmissionStatus.TIME_LIMIT_EXCEEDED
           : SubmissionStatus.WRONG_ANSWER;

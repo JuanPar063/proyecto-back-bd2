@@ -10,6 +10,7 @@ import { ChallengesModule } from './modules/challenges/challenges.module';
 import { SchemasModule } from './modules/schemas/schemas.module';
 import { TestDataModule } from './modules/test-data/test-data.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
+import { EvaluationsModule } from './modules/evaluations/evaluations.module';
 import { AiAssistantModule } from './modules/ai-assistant/ai-assistant.module';
 import { DemoModule } from './modules/demo/demo.module';
 import { BullModule } from '@nestjs/bullmq';
@@ -31,6 +32,7 @@ import { ReportsModule } from './modules/reports/reports.module';
     SchemasModule,
     TestDataModule,
     SubmissionsModule,
+    EvaluationsModule,
     AiAssistantModule,
     ReportsModule,
     DemoModule,

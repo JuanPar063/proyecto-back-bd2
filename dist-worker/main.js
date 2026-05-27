@@ -79,9 +79,10 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
             columns: sqlResult.columns,
         }, evaluationContext.expectedResult ?? []);
         let aiQualityScore = null;
+        let aiWarnings = [];
         try {
             const apiUrl = process.env.API_URL ?? 'http://api:3000/api';
-            const resp = await fetch(`${apiUrl}/ai-assistant/analyze`, {
+            const resp = await fetch(`${apiUrl}/ai-assistant/internal/analyze`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -95,7 +96,8 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
             if (resp.ok) {
                 const ai = await resp.json();
                 aiQualityScore = ai['qualityScore'] ?? null;
-                mainLogger.info('Asistente IA respondió ✓');
+                aiWarnings = ai['warnings'] ?? [];
+                mainLogger.info(`Asistente IA respondió ✓ (${aiWarnings.length} warning(s))`);
             }
             else {
                 mainLogger.warn(`Asistente IA respondió ${resp.status} — continuando sin IA`);
@@ -114,8 +116,11 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
             aiQualityScore,
         });
         const feedback = score_calculator_1.scoreCalculatorService.generateFeedback(scoreBreakdown, evaluationContext.studentQuery);
+        const hasCriticalWarning = aiWarnings.some((w) => w.severity === 'critical');
         const finalStatus = comparisonResult.isCorrect
-            ? client_1.SubmissionStatus.ACCEPTED
+            ? hasCriticalWarning
+                ? client_1.SubmissionStatus.OPTIMIZATION_REQUIRED
+                : client_1.SubmissionStatus.ACCEPTED
             : sqlResult.executionTimeMs > evaluationContext.challengeTimeLimit
                 ? client_1.SubmissionStatus.TIME_LIMIT_EXCEEDED
                 : client_1.SubmissionStatus.WRONG_ANSWER;
