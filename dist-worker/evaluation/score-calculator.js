@@ -3,20 +3,28 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.scoreCalculatorService = exports.ScoreCalculatorService = void 0;
 const logger_1 = require("../utils/logger");
 const logger = (0, logger_1.createLogger)('ScoreCalculator');
+const clamp = (v, min, max) => Math.max(min, Math.min(max, Math.round(v)));
 class ScoreCalculatorService {
     calculateScore(context) {
         logger.info('Calculando score final...');
         const correctnessScore = this.calculateCorrectness(context.correctness);
         const timeScore = this.calculateTimeScore(context.executionTimeMs, context.timeLimit);
-        const practicesScore = this.calculateSqlPractices(context.studentQuery);
-        const finalScore = correctnessScore + timeScore + practicesScore;
+        const ai = context.aiQualityScore ?? {};
+        const practicesScore = ai.goodPractices != null
+            ? clamp(ai.goodPractices, 0, 10)
+            : this.calculateSqlPractices(context.studentQuery);
+        const clarityScore = clamp(ai.clarity ?? 0, 0, 5);
+        const improvementScore = clamp(ai.improvement ?? 0, 0, 10);
+        const finalScore = correctnessScore + timeScore + practicesScore + clarityScore + improvementScore;
         const breakdown = {
             correctness: correctnessScore,
             executionTime: timeScore,
             sqlPractices: practicesScore,
+            clarity: clarityScore,
+            improvement: improvementScore,
             final: Math.min(100, finalScore),
         };
-        logger.info(`Score breakdown: correctness=${correctnessScore}, time=${timeScore}, practices=${practicesScore} => TOTAL=${breakdown.final}`);
+        logger.info(`Score breakdown: correctness=${correctnessScore}, time=${timeScore}, practices=${practicesScore}, clarity=${clarityScore}, improvement=${improvementScore} => TOTAL=${breakdown.final}`);
         return breakdown;
     }
     calculateCorrectness(comparisonResult) {

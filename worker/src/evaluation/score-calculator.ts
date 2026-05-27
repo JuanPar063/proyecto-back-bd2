@@ -25,7 +25,15 @@ interface ScoringContext {
   timeLimit: number; // ms
   studentQuery: string;
   expectedRowCount: number;
+  aiQualityScore?: {      // Reservado para asistente IA de Pardo
+    goodPractices?: number; // 0-10
+    clarity?: number;       // 0-5
+    improvement?: number;   // 0-10
+  } | null;
 }
+
+const clamp = (v: number, min: number, max: number): number =>
+  Math.max(min, Math.min(max, Math.round(v)));
 
 export class ScoreCalculatorService {
   /**
@@ -44,20 +52,31 @@ export class ScoreCalculatorService {
     const timeScore = this.calculateTimeScore(context.executionTimeMs, context.timeLimit);
 
     // 3. SQL Practices: 0-10 pts
-    const practicesScore = this.calculateSqlPractices(context.studentQuery);
+    // Si el IA de Pardo respondió, usa sus scores. Si no, heurística propia.
+    const ai = context.aiQualityScore ?? {};
+    const practicesScore = (ai.goodPractices != null)
+      ? clamp(ai.goodPractices, 0, 10)
+      : this.calculateSqlPractices(context.studentQuery);
 
-    // 4. Final: suma de todos
-    const finalScore = correctnessScore + timeScore + practicesScore;
+    // 4. Clarity: 0-5 pts (solo cuando Pardo entregue — por ahora 0)
+    const clarityScore = clamp(ai.clarity ?? 0, 0, 5);
+
+    // 5. Improvement: 0-10 pts (solo cuando Pardo entregue — por ahora 0)
+    const improvementScore = clamp(ai.improvement ?? 0, 0, 10);
+
+    const finalScore = correctnessScore + timeScore + practicesScore + clarityScore + improvementScore;
 
     const breakdown: ScoreBreakdown = {
       correctness: correctnessScore,
       executionTime: timeScore,
       sqlPractices: practicesScore,
-      final: Math.min(100, finalScore), // Max 100
+      clarity: clarityScore,
+      improvement: improvementScore,
+      final: Math.min(100, finalScore),
     };
 
     logger.info(
-      `Score breakdown: correctness=${correctnessScore}, time=${timeScore}, practices=${practicesScore} => TOTAL=${breakdown.final}`,
+      `Score breakdown: correctness=${correctnessScore}, time=${timeScore}, practices=${practicesScore}, clarity=${clarityScore}, improvement=${improvementScore} => TOTAL=${breakdown.final}`,
     );
 
     return breakdown;

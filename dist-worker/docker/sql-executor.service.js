@@ -85,8 +85,17 @@ class SqlExecutorService {
         const startTime = Date.now();
         try {
             await this.client.query(`SET statement_timeout TO ${timeout}`);
+            let explainPlan = null;
+            try {
+                const explainRes = await this.client.query(`EXPLAIN (FORMAT JSON) ${query}`);
+                explainPlan = JSON.stringify(explainRes.rows[0]?.['QUERY PLAN'] ?? null);
+            }
+            catch (explainErr) {
+                logger.debug(`EXPLAIN falló (no fatal): ${explainErr}`);
+            }
+            const queryStartTime = Date.now();
             const result = await this.client.query(query);
-            const executionTimeMs = Date.now() - startTime;
+            const executionTimeMs = Date.now() - queryStartTime;
             logger.success(`Query ejecutada en ${executionTimeMs}ms (${result.rows.length} filas, ${result.fields.length} columnas)`);
             return {
                 success: true,
@@ -94,6 +103,7 @@ class SqlExecutorService {
                 rowCount: result.rows.length,
                 columns: result.fields.map((f) => f.name),
                 executionTimeMs,
+                explainPlan,
             };
         }
         catch (error) {

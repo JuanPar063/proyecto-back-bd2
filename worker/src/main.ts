@@ -168,6 +168,38 @@ const worker = new Worker<SubmissionJobData>(
         evaluationContext.expectedResult ?? [],
       );
 
+      // FASE 6.5: Hook al asistente IA (P1 — graceful degradation)
+      // Si Pardo aún no entregó su módulo, seguimos sin él (no bloquea la evaluación).
+      let aiQualityScore: {
+        goodPractices?: number;
+        clarity?: number;
+        improvement?: number;
+      } | null = null;
+
+      try {
+        const apiUrl = process.env.API_URL ?? 'http://api:3000/api';
+        const resp = await fetch(`${apiUrl}/ai-assistant/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: evaluationContext.studentQuery,
+            schemaDdl: evaluationContext.schemaSql,
+            executionTimeMs: sqlResult.executionTimeMs,
+            explainPlan: sqlResult.explainPlan,
+            status: comparisonResult.isCorrect ? 'ACCEPTED' : 'WRONG_ANSWER',
+          }),
+        });
+        if (resp.ok) {
+          const ai = await resp.json() as Record<string, any>;
+          aiQualityScore = (ai['qualityScore'] as typeof aiQualityScore) ?? null;
+          mainLogger.info('Asistente IA respondió ✓');
+        } else {
+          mainLogger.warn(`Asistente IA respondió ${resp.status} — continuando sin IA`);
+        }
+      } catch (e: any) {
+        mainLogger.warn(`Asistente IA no disponible: ${e.message} — continuando sin IA`);
+      }
+
       // FASE 7: Calcular score
       mainLogger.info('FASE 7: Calculando puntuación...');
       const scoreBreakdown = scoreCalculatorService.calculateScore({
@@ -176,6 +208,7 @@ const worker = new Worker<SubmissionJobData>(
         timeLimit: evaluationContext.challengeTimeLimit,
         studentQuery: evaluationContext.studentQuery,
         expectedRowCount: evaluationContext.expectedResult?.length ?? 0,
+        aiQualityScore,
       });
 
       const feedback = scoreCalculatorService.generateFeedback(
@@ -306,6 +339,11 @@ async function getEvaluationContext(submissionId: string): Promise<EvaluationCon
       challenge: {
         include: {
           schema: true,
+          // FIX P0: incluir el dataset más antiguo del reto (el seed real)
+          testDatasets: {
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+          },
         },
       },
       student: {
@@ -316,6 +354,14 @@ async function getEvaluationContext(submissionId: string): Promise<EvaluationCon
 
   if (!submission.challenge.schema) {
     throw new Error('Challenge no tiene schema definido');
+  }
+
+  // FIX P0: validar que haya TestDataset con SQL
+  const dataset = submission.challenge.testDatasets[0];
+  if (!dataset || !dataset.sql) {
+    throw new Error(
+      'Challenge no tiene TestDataset cargado; el runner no puede sembrar datos.',
+    );
   }
 
   mainLogger.info(`Submission ID: ${submissionId}`);
@@ -329,9 +375,7 @@ async function getEvaluationContext(submissionId: string): Promise<EvaluationCon
     challengeId: submission.challengeId,
     challengeTimeLimit: submission.challenge.timeLimit,
     schemaSql: submission.challenge.schema.ddl,
-    seedSql: submission.challenge.schema.parsedTables
-      ? undefined
-      : submission.challenge.schema.ddl, // TODO: obtener del TestDataset
+    seedSql: dataset.sql,  // FIX P0: ahora sí trae los INSERTs del TestDataset
     studentQuery: submission.query,
     expectedResult: submission.challenge.expectedResult as any[] | null | undefined,
     databaseEngine: submission.challenge.databaseEngine as any,

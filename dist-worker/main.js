@@ -78,6 +78,32 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
             rows: sqlResult.rows,
             columns: sqlResult.columns,
         }, evaluationContext.expectedResult ?? []);
+        let aiQualityScore = null;
+        try {
+            const apiUrl = process.env.API_URL ?? 'http://api:3000/api';
+            const resp = await fetch(`${apiUrl}/ai-assistant/analyze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query: evaluationContext.studentQuery,
+                    schemaDdl: evaluationContext.schemaSql,
+                    executionTimeMs: sqlResult.executionTimeMs,
+                    explainPlan: sqlResult.explainPlan,
+                    status: comparisonResult.isCorrect ? 'ACCEPTED' : 'WRONG_ANSWER',
+                }),
+            });
+            if (resp.ok) {
+                const ai = await resp.json();
+                aiQualityScore = ai.qualityScore ?? null;
+                mainLogger.info('Asistente IA respondió ✓');
+            }
+            else {
+                mainLogger.warn(`Asistente IA respondió ${resp.status} — continuando sin IA`);
+            }
+        }
+        catch (e) {
+            mainLogger.warn(`Asistente IA no disponible: ${e.message} — continuando sin IA`);
+        }
         mainLogger.info('FASE 7: Calculando puntuación...');
         const scoreBreakdown = score_calculator_1.scoreCalculatorService.calculateScore({
             correctness: comparisonResult,
@@ -85,6 +111,7 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
             timeLimit: evaluationContext.challengeTimeLimit,
             studentQuery: evaluationContext.studentQuery,
             expectedRowCount: evaluationContext.expectedResult?.length ?? 0,
+            aiQualityScore,
         });
         const feedback = score_calculator_1.scoreCalculatorService.generateFeedback(scoreBreakdown, evaluationContext.studentQuery);
         const finalStatus = comparisonResult.isCorrect
@@ -173,6 +200,10 @@ async function getEvaluationContext(submissionId) {
             challenge: {
                 include: {
                     schema: true,
+                    testDatasets: {
+                        orderBy: { createdAt: 'asc' },
+                        take: 1,
+                    },
                 },
             },
             student: {
@@ -182,6 +213,10 @@ async function getEvaluationContext(submissionId) {
     });
     if (!submission.challenge.schema) {
         throw new Error('Challenge no tiene schema definido');
+    }
+    const dataset = submission.challenge.testDatasets[0];
+    if (!dataset || !dataset.sql) {
+        throw new Error('Challenge no tiene TestDataset cargado; el runner no puede sembrar datos.');
     }
     mainLogger.info(`Submission ID: ${submissionId}`);
     mainLogger.info(`Challenge: ${submission.challenge.title}`);
@@ -193,9 +228,7 @@ async function getEvaluationContext(submissionId) {
         challengeId: submission.challengeId,
         challengeTimeLimit: submission.challenge.timeLimit,
         schemaSql: submission.challenge.schema.ddl,
-        seedSql: submission.challenge.schema.parsedTables
-            ? undefined
-            : submission.challenge.schema.ddl,
+        seedSql: dataset.sql,
         studentQuery: submission.query,
         expectedResult: submission.challenge.expectedResult,
         databaseEngine: submission.challenge.databaseEngine,

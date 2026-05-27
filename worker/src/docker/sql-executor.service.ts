@@ -151,10 +151,23 @@ export class SqlExecutorService {
       // Establece timeout para esta query específica
       await this.client.query(`SET statement_timeout TO ${timeout}`);
 
-      // Ejecuta la query del estudiante
-      const result = await this.client.query(query);
+      // FIX P1: capturar plan estimado ANTES de ejecutar la query real.
+      // Usamos EXPLAIN sin ANALYZE para no doblar el tiempo de ejecución.
+      // Si el EXPLAIN falla (ej. query con DML), seguimos sin él — no es fatal.
+      let explainPlan: string | null = null;
+      try {
+        const explainRes = await this.client.query(
+          `EXPLAIN (FORMAT JSON) ${query}`,
+        );
+        explainPlan = JSON.stringify(explainRes.rows[0]?.['QUERY PLAN'] ?? null);
+      } catch (explainErr) {
+        logger.debug(`EXPLAIN falló (no fatal): ${explainErr}`);
+      }
 
-      const executionTimeMs = Date.now() - startTime;
+      // Ejecuta la query del estudiante y mide su tiempo real (sin contar el EXPLAIN)
+      const queryStartTime = Date.now();
+      const result = await this.client.query(query);
+      const executionTimeMs = Date.now() - queryStartTime;
 
       logger.success(
         `Query ejecutada en ${executionTimeMs}ms (${result.rows.length} filas, ${result.fields.length} columnas)`,
@@ -166,6 +179,7 @@ export class SqlExecutorService {
         rowCount: result.rows.length,
         columns: result.fields.map((f: any) => f.name),
         executionTimeMs,
+        explainPlan,
       };
     } catch (error: any) {
       const executionTimeMs = Date.now() - startTime;

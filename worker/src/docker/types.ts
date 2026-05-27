@@ -11,6 +11,7 @@ export interface SqlExecutionResult {
   columns: string[];
   success: boolean;
   error?: string;
+  explainPlan?: string | null; // JSON string de EXPLAIN (FORMAT JSON) sin ANALYZE
 }
 
 export interface ContainerConfig {
@@ -34,10 +35,12 @@ export interface SubmissionEvaluation {
 }
 
 export interface ScoreBreakdown {
-  correctness: number; // 0-60
+  correctness: number;   // 0-60
   executionTime: number; // 0-15
-  sqlPractices: number; // 0-10
-  final: number; // 0-100
+  sqlPractices: number;  // 0-10
+  clarity: number;       // 0-5  (reservado para asistente IA de Pardo)
+  improvement: number;   // 0-10 (reservado para asistente IA de Pardo)
+  final: number;         // 0-100
 }
 
 export enum SubmissionStatus {
