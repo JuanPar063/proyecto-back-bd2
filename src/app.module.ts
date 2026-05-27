@@ -10,6 +10,7 @@ import { ChallengesModule } from './modules/challenges/challenges.module';
 import { SchemasModule } from './modules/schemas/schemas.module';
 import { TestDataModule } from './modules/test-data/test-data.module';
 import { SubmissionsModule } from './modules/submissions/submissions.module';
+import { EvaluationsModule } from './modules/evaluations/evaluations.module';
 import { DemoModule } from './modules/demo/demo.module';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
@@ -29,6 +30,7 @@ import { ConfigService } from '@nestjs/config';
     SchemasModule,
     TestDataModule,
     SubmissionsModule,
+    EvaluationsModule,
     DemoModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],

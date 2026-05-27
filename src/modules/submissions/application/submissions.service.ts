@@ -134,10 +134,17 @@ export class SubmissionsService {
       );
     }
 
+    const evaluationAttemptId = await this.resolveEvaluationAttemptId(
+      dto.evaluationId,
+      studentId,
+      challengeId,
+    );
+
     const submission = await this.prisma.submission.create({
       data: {
         studentId,
         challengeId,
+        evaluationAttemptId,
         query: dto.query,
         status: SubmissionStatus.QUEUED,
         engine: challenge.databaseEngine,
@@ -180,6 +187,15 @@ export class SubmissionsService {
           },
         },
         student: { select: { id: true, fullName: true, email: true } },
+        evaluationAttempt: {
+          select: {
+            id: true,
+            evaluationId: true,
+            attemptNumber: true,
+            startedAt: true,
+            endsAt: true,
+          },
+        },
       },
     });
     if (!submission) throw new NotFoundException('Submission no encontrada');
@@ -225,6 +241,9 @@ export class SubmissionsService {
       include: {
         challenge: { select: { id: true, title: true, courseId: true } },
         student: { select: { id: true, fullName: true, email: true } },
+        evaluationAttempt: {
+          select: { id: true, evaluationId: true, attemptNumber: true },
+        },
       },
     });
   }
@@ -235,7 +254,12 @@ export class SubmissionsService {
       where: { studentId },
       orderBy: { createdAt: 'desc' },
       take: 50,
-      include: { challenge: { select: { id: true, title: true } } },
+      include: {
+        challenge: { select: { id: true, title: true } },
+        evaluationAttempt: {
+          select: { id: true, evaluationId: true, attemptNumber: true },
+        },
+      },
     });
   }
 
@@ -313,6 +337,64 @@ export class SubmissionsService {
       );
     }
     return c;
+  }
+
+  private async resolveEvaluationAttemptId(
+    evaluationId: string | undefined,
+    studentId: string,
+    challengeId: string,
+  ): Promise<string | undefined> {
+    if (!evaluationId) return undefined;
+
+    const now = new Date();
+    const evaluation = await this.prisma.evaluation.findUnique({
+      where: { id: evaluationId },
+      include: {
+        course: {
+          select: {
+            enrollments: {
+              where: { studentId },
+              select: { id: true },
+            },
+          },
+        },
+        challenges: {
+          where: { challengeId },
+          select: { id: true },
+        },
+        attempts: {
+          where: {
+            studentId,
+            submittedAt: null,
+            endsAt: { gt: now },
+          },
+          orderBy: { attemptNumber: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!evaluation) throw new NotFoundException('Evaluacion no encontrada');
+    if (evaluation.course.enrollments.length === 0) {
+      throw new NotFoundException('Evaluacion no encontrada');
+    }
+    if (now < evaluation.startDate || now > evaluation.endDate) {
+      throw new BadRequestException('La evaluacion no esta en su ventana activa');
+    }
+    if (evaluation.challenges.length === 0) {
+      throw new BadRequestException(
+        'El reto no pertenece a la evaluacion indicada',
+      );
+    }
+
+    const activeAttempt = evaluation.attempts[0];
+    if (!activeAttempt) {
+      throw new BadRequestException(
+        'Debes iniciar la evaluacion antes de enviar submissions',
+      );
+    }
+
+    return activeAttempt.id;
   }
 
   /**
