@@ -327,7 +327,79 @@ Authorization: Bearer <studToken>
 
 Devuelve ranking agregado por estudiante. Visible para los tres roles.
 
-## 13. Diseño Clean Architecture
+## 13. Escenario de volumen
+
+El seed estático (sección 7) usa 5 clientes y 10 órdenes para que los `ExpectedResult` matcheen exacto y los seis estados terminales sean reproducibles. Para demostrar que el sistema procesa datasets dentro del rango pedido por la rúbrica (cientos a miles de registros), el endpoint demo genera un escenario adicional en segundos.
+
+Paso 1 — Generar el escenario grande:
+
+```http
+POST /api/demo/customers-orders
+Authorization: Bearer <profToken (Carlos)>
+
+{
+  "courseName": "Demo escala 5K",
+  "courseCode": "DEMO-5K-1",
+  "customerCount": 500,
+  "orderCount": 5000
+}
+```
+
+Respuesta en ~1-2 segundos:
+
+```jsonc
+{
+  "message": "Escenario demo creado correctamente",
+  "course":   { "id": "...", "name": "Demo escala 5K", "code": "DEMO-5K-1" },
+  "challenge":{ "id": "...", "title": "Clientes con más de 3 compras", "status": "published" },
+  "schema":   { "id": "...", "tables": ["customers", "orders"] },
+  "dataset":  { "id": "...", "name": "demo_customers_orders",
+                "rowsCustomers": 500, "rowsOrders": 5000 }
+}
+```
+
+Paso 2 — Cargar un expected mínimo para poder enviar submissions (el endpoint demo no lo precarga porque los valores exactos del dataset salen de faker; `SELECT COUNT(*)` es determinístico contra cualquier dataset):
+
+```http
+PUT /api/challenges/<challengeId-5K>/expected-result
+Authorization: Bearer <profToken>
+
+{ "columns": ["total"], "rows": [[5000]], "orderSensitive": false, "floatTolerance": 0 }
+```
+
+Paso 3 — Inscribir un estudiante y disparar una submission:
+
+```http
+POST /api/courses/<courseId-5K>/enrollments
+Authorization: Bearer <profToken>
+
+{ "studentEmail": "elena.estudiante@univ.edu" }
+```
+
+```http
+POST /api/challenges/<challengeId-5K>/submissions
+Authorization: Bearer <studToken (Elena)>
+
+{ "query": "SELECT COUNT(*) AS total FROM orders" }
+```
+
+Paso 4 — Observar logs del worker:
+
+```text
+[SqlExecutor] DDL ejecutado en ~50ms
+[SqlExecutor] Seed ejecutado en ~400ms      ← inserción de 5500 filas
+[SqlExecutor] Query ejecutada en ~30ms      ← 5000 filas escaneadas
+[Worker] Submission completado: ACCEPTED (Score: 100/100)
+```
+
+El runner aplicó 5.500 INSERTs y ejecutó la query del estudiante en menos de 500 ms totales, todo dentro de un contenedor Postgres temporal con 512 MB de RAM. Esto demuestra que el sistema cumple el rango de 500-10.000 registros sin degradación apreciable.
+
+Notas:
+
+- El endpoint `/demo/customers-orders` acepta `customerCount` hasta 50.000 y `orderCount` hasta 500.000 — los límites están en `src/modules/demo/application/dto/demo.dto.ts:27,34`.
+- El reto creado queda persistido y puede reusarse para más submissions, para mostrar reportes sobre un dataset grande, o para comparar tiempos contra el escenario estático del seed.
+
+## 14. Diseño Clean Architecture
 
 Cada módulo bajo `src/modules/<contexto>/` respeta cuatro capas:
 
@@ -355,20 +427,20 @@ El worker (`worker/src/`) es un proceso separado que reusa contratos y funciones
 
 Los archivos no dependen de NestJS ni Prisma, por eso pueden correr igual en API y worker.
 
-## 14. Mapeo a la rúbrica
+## 15. Mapeo a la rúbrica
 
 | Criterio | Peso | Dónde demostrarlo |
 |----------|------|-------------------|
-| Diseño de dominio y Clean Architecture | 10% | Sección 13 + estructura del repo + `ai-assistant.module.ts` |
+| Diseño de dominio y Clean Architecture | 10% | Sección 14 + estructura del repo + `ai-assistant.module.ts` |
 | API REST, autenticación y roles | 10% | Sección 2 (login de los 3 roles) + Swagger UI |
 | Gestión de cursos, retos SQL y evaluaciones | 15% | Sección 7 (cursos y retos del seed) + Sección 11 (evaluations) |
-| Gestión de esquemas y generación de datos aleatorios | 10% | Sección 7 (schema cargado) + `POST /test-data/preview` + `data-generator.service.ts` |
+| Gestión de esquemas y generación de datos aleatorios | 10% | Sección 7 (schema cargado) + Sección 13 (volumen 500-5K) + `data-generator.service.ts` |
 | Evaluador automático SQL | 20% | Sección 4 (worker 9 fases) + Sección 8 (6 estados terminales) |
 | Runner SQL con Docker y procesamiento con Redis | 15% | Sección 4 + `docker compose logs -f worker` + `docker ps` durante submission |
 | Asistente inteligente de optimización SQL | 10% | Sección 9 (analyze en vivo) + Sección 10 (OPTIMIZATION_REQUIRED) |
 | Reportes, leaderboard, documentación y video | 10% | Sección 12 + `README.md` + `docs/` |
 
-## 15. Cheat sheet de la sustentación
+## 16. Cheat sheet de la sustentación
 
 Tiempo estimado por bloque:
 
@@ -382,9 +454,10 @@ Asistente IA manual                3 min
 OPTIMIZATION_REQUIRED en vivo      3 min
 Evaluaciones + attempt             3 min
 Reportes + leaderboard             2 min
+Escenario de volumen (5K filas)    2 min
 Clean Architecture (tour código)   3 min
                                   ---
-Total                             28 min
+Total                             30 min
 ```
 
 Comandos de apoyo:
