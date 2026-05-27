@@ -7,6 +7,13 @@ enum NodeEnv {
   test = 'test',
 }
 
+enum LlmProvider {
+  stub = 'stub',
+  openai = 'openai',
+  anthropic = 'anthropic',
+  ollama = 'ollama',
+}
+
 class EnvVars {
   @IsEnum(NodeEnv)
   NODE_ENV: NodeEnv = NodeEnv.development;
@@ -49,6 +56,34 @@ class EnvVars {
   @IsInt()
   @Min(4)
   BCRYPT_ROUNDS = 10;
+
+  // ==========================================================
+  // Asistente IA (Pardo, Entrega 2)
+  // El proveedor real se cablea cambiando LLM_PROVIDER + las
+  // credenciales correspondientes. Mientras tanto, "stub" mantiene
+  // el pipeline funcionando sin red ni API keys.
+  // ==========================================================
+  @IsOptional()
+  @IsEnum(LlmProvider)
+  LLM_PROVIDER: LlmProvider = LlmProvider.stub;
+
+  @IsOptional()
+  @IsString()
+  LLM_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  LLM_MODEL?: string;
+
+  @IsOptional()
+  @IsString()
+  LLM_BASE_URL?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(100)
+  AI_SLOW_QUERY_THRESHOLD_MS = 800;
 }
 
 export function validateEnv(config: Record<string, unknown>) {
