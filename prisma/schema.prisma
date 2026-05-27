@@ -33,10 +33,11 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  coursesTaught   Course[]     @relation("CourseProfessor")
-  enrollments     Enrollment[]
-  challengesOwned Challenge[]  @relation("ChallengeAuthor")
-  submissions     Submission[]
+  coursesTaught      Course[]            @relation("CourseProfessor")
+  enrollments        Enrollment[]
+  challengesOwned    Challenge[]         @relation("ChallengeAuthor")
+  submissions        Submission[]
+  evaluationAttempts EvaluationAttempt[]
 
   @@index([role])
   @@map("users")
@@ -60,6 +61,7 @@ model Course {
   professor   User         @relation("CourseProfessor", fields: [professorId], references: [id])
   enrollments Enrollment[]
   challenges  Challenge[]
+  evaluations Evaluation[]
 
   @@index([professorId])
   @@map("courses")
@@ -112,15 +114,17 @@ model Challenge {
   status         ChallengeStatus @default(draft)
   courseId       String
   createdById    String
+  expectedResult Json?           // Resultado esperado en formato JSON (array de objetos)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
-  course         Course          @relation(fields: [courseId], references: [id])
-  createdBy      User            @relation("ChallengeAuthor", fields: [createdById], references: [id])
+  course         Course                @relation(fields: [courseId], references: [id])
+  createdBy      User                  @relation("ChallengeAuthor", fields: [createdById], references: [id])
   schema         SchemaScript?
   testDatasets   TestDataset[]
   submissions    Submission[]
   expectedResult ExpectedResult?
+  evaluations    EvaluationChallenge[]
 
   @@index([courseId, status])
   @@index([status])
@@ -189,6 +193,12 @@ enum SubmissionStatus {
   OPTIMIZATION_REQUIRED
 }
 
+enum EvaluationResultsVisibility {
+  DURING_EVALUATION
+  AFTER_END
+  ALWAYS
+}
+
 model Submission {
   id              String           @id @default(uuid())
   studentId       String
@@ -210,8 +220,71 @@ model Submission {
   recommendations Recommendation[]
 
   @@index([studentId, challengeId])
+  @@index([evaluationAttemptId])
   @@index([status])
   @@map("submissions")
+}
+
+// ============================================================
+// EVALUATIONS / PARCIALES (Entrega 2 — módulo Sofia)
+// Una evaluación agrupa retos de un curso, limita ventanas de tiempo
+// e intentos, y conecta los submissions del estudiante con un intento.
+// ============================================================
+
+model Evaluation {
+  id                String                      @id @default(uuid())
+  name              String
+  description       String?                     @db.Text
+  courseId          String
+  startDate         DateTime
+  endDate           DateTime
+  durationMinutes   Int
+  maxAttempts       Int                         @default(1)
+  resultsVisibility EvaluationResultsVisibility @default(AFTER_END)
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  course     Course                @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  challenges EvaluationChallenge[]
+  attempts   EvaluationAttempt[]
+
+  @@index([courseId])
+  @@index([startDate, endDate])
+  @@map("evaluations")
+}
+
+model EvaluationChallenge {
+  id           String @id @default(uuid())
+  evaluationId String
+  challengeId  String
+  position     Int
+
+  evaluation Evaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  challenge  Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+
+  @@unique([evaluationId, challengeId])
+  @@unique([evaluationId, position])
+  @@index([challengeId])
+  @@map("evaluation_challenges")
+}
+
+model EvaluationAttempt {
+  id            String    @id @default(uuid())
+  evaluationId  String
+  studentId     String
+  attemptNumber Int
+  startedAt     DateTime  @default(now())
+  endsAt        DateTime
+  submittedAt   DateTime?
+
+  evaluation  Evaluation   @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  student     User         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+
+  @@unique([evaluationId, studentId, attemptNumber])
+  @@index([studentId])
+  @@index([evaluationId, studentId])
+  @@map("evaluation_attempts")
 }
 
 // ============================================================

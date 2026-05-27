@@ -8,6 +8,8 @@ services:
     image: postgres:16-alpine
     container_name: sqljudge-postgres
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sqljudge}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sqljudge_dev_password}
@@ -16,7 +18,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sqljudge}"]
       interval: 5s
@@ -29,9 +31,11 @@ services:
     image: redis:7-alpine
     container_name: sqljudge-redis
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_PORT:-6380}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -48,6 +52,8 @@ services:
       dockerfile: Dockerfile
     container_name: sqljudge-api
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-sqljudge}:${POSTGRES_PASSWORD:-sqljudge_dev_password}@postgres:5432/${POSTGRES_DB:-sqljudge}?schema=public
@@ -71,11 +77,14 @@ services:
       dockerfile: Dockerfile
     container_name: sqljudge-worker
     restart: unless-stopped
+    mem_limit: 384m
+    cpus: 0.5
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-sqljudge}:${POSTGRES_PASSWORD:-sqljudge_dev_password}@postgres:5432/${POSTGRES_DB:-sqljudge}?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      DOCKER_HOST: unix:///var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,6 +93,8 @@ services:
       api:
         condition: service_started
     command: ["node", "dist-worker/main.js"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
     networks:
       - sqljudge
 

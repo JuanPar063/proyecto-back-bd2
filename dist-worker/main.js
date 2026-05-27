@@ -7,6 +7,7 @@ const client_1 = require("@prisma/client");
 const result_comparator_1 = require("./evaluator/result-comparator");
 const score_calculator_1 = require("./evaluator/score-calculator");
 const prisma = new client_1.PrismaClient();
+const mainLogger = (0, logger_1.createLogger)('Worker');
 const connection = {
     host: process.env.REDIS_HOST ?? 'localhost',
     port: Number(process.env.REDIS_PORT ?? 6379),
@@ -14,6 +15,11 @@ const connection = {
 };
 exports.SUBMISSIONS_QUEUE = 'submissions';
 exports.EVALUATIONS_QUEUE = 'evaluations';
+const CONTAINER_CONFIG = {
+    memory: 512 * 1024 * 1024,
+    cpus: 0.5,
+    timeout: 30000,
+};
 new bullmq_1.Queue(exports.SUBMISSIONS_QUEUE, { connection });
 new bullmq_1.Queue(exports.EVALUATIONS_QUEUE, { connection });
 async function runQueryStub(query, expected) {
@@ -186,17 +192,69 @@ const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
     }
 }, { connection, concurrency: 2 });
 worker.on('failed', (job, err) => {
-    console.error(`[worker] Job ${job?.id} falló:`, err);
+    mainLogger.error(`Job ${job?.id} falló: ${err?.message}`);
 });
 worker.on('ready', () => {
-    console.log(`[worker] Listo. Escuchando cola "${exports.SUBMISSIONS_QUEUE}"`);
+    mainLogger.success(`✅ Worker listo. Escuchando cola "${exports.SUBMISSIONS_QUEUE}"`);
+});
+worker.on('completed', (job) => {
+    mainLogger.info(`Job ${job.id} completado`);
 });
 const shutdown = async () => {
-    console.log('[worker] Cerrando...');
-    await worker.close();
-    await prisma.$disconnect();
-    process.exit(0);
+    mainLogger.info('\n⏹️  Iniciando shutdown graceful...');
+    try {
+        await docker_service_1.dockerService.cleanupAllContainers();
+        await worker.close();
+        await prisma.$disconnect();
+        mainLogger.success('✅ Shutdown completado');
+        process.exit(0);
+    }
+    catch (error) {
+        mainLogger.error(`Error durante shutdown: ${error}`);
+        process.exit(1);
+    }
 };
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+async function getEvaluationContext(submissionId) {
+    const submission = await prisma.submission.findUniqueOrThrow({
+        where: { id: submissionId },
+        include: {
+            challenge: {
+                include: {
+                    schema: true,
+                    testDatasets: {
+                        orderBy: { createdAt: 'asc' },
+                        take: 1,
+                    },
+                },
+            },
+            student: {
+                select: { id: true },
+            },
+        },
+    });
+    if (!submission.challenge.schema) {
+        throw new Error('Challenge no tiene schema definido');
+    }
+    const dataset = submission.challenge.testDatasets[0];
+    if (!dataset || !dataset.sql) {
+        throw new Error('Challenge no tiene TestDataset cargado; el runner no puede sembrar datos.');
+    }
+    mainLogger.info(`Submission ID: ${submissionId}`);
+    mainLogger.info(`Challenge: ${submission.challenge.title}`);
+    mainLogger.info(`Estudiante: ${submission.studentId}`);
+    mainLogger.info(`Query: ${submission.query.substring(0, 100)}...`);
+    return {
+        submissionId,
+        studentId: submission.studentId,
+        challengeId: submission.challengeId,
+        challengeTimeLimit: submission.challenge.timeLimit,
+        schemaSql: submission.challenge.schema.ddl,
+        seedSql: dataset.sql,
+        studentQuery: submission.query,
+        expectedResult: submission.challenge.expectedResult,
+        databaseEngine: submission.challenge.databaseEngine,
+    };
+}
 //# sourceMappingURL=main.js.map
