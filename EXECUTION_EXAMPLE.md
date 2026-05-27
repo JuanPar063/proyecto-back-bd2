@@ -18,15 +18,219 @@ http://localhost:3000/docs
 
 ## 2. Crear datos academicos
 
-1. Login como profesor.
-2. Crear curso.
-3. Crear estudiante.
-4. Inscribir estudiante en el curso.
-5. Crear reto SQL.
-6. Cargar schema.
-7. Cargar test data manual o generado.
-8. Cargar expected result.
-9. Publicar reto.
+El seed (`npm run prisma:seed`) ya hace todo lo siguiente de forma automatizada. Esta sección demuestra los endpoints individualmente, lo cual cubre los criterios "API REST, autenticación y roles" y "Gestión de cursos, retos SQL y evaluaciones" de la rúbrica. Para no chocar con datos del seed, los ejemplos usan emails y códigos terminados en `-MANUAL`.
+
+### 2.1 — Login admin
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{ "email": "admin@sqljudge.local", "password": "Admin123!" }
+```
+
+Respuesta:
+
+```jsonc
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiI...",
+  "refreshToken": "...",
+  "user": { "id": "...", "email": "admin@sqljudge.local", "role": "ADMIN", ... }
+}
+```
+
+Guardar `accessToken` como `$adminToken`.
+
+### 2.2 — Crear profesor (ADMIN)
+
+```http
+POST /api/users
+Authorization: Bearer $adminToken
+Content-Type: application/json
+
+{
+  "email": "profe.manual@univ.edu",
+  "password": "Profe123!",
+  "fullName": "Profesor Manual",
+  "role": "PROFESSOR"
+}
+```
+
+Devuelve el `user` creado con `id`, sin `passwordHash`.
+
+### 2.3 — Login profesor
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{ "email": "profe.manual@univ.edu", "password": "Profe123!" }
+```
+
+Guardar `accessToken` como `$profToken`.
+
+### 2.4 — Crear curso (PROFESSOR)
+
+```http
+POST /api/courses
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{
+  "name": "Bases de Datos II",
+  "code": "BD2-MANUAL-001",
+  "period": "2026-1",
+  "group": "1"
+}
+```
+
+Devuelve el `course` con `id` (`$course_id`). El campo `code` es UNIQUE: si lo repites devuelve 409 Conflict.
+
+### 2.5 — Crear estudiante (ADMIN)
+
+```http
+POST /api/users
+Authorization: Bearer $adminToken
+Content-Type: application/json
+
+{
+  "email": "estud.manual@univ.edu",
+  "password": "Stud123!",
+  "fullName": "Estudiante Manual",
+  "role": "STUDENT"
+}
+```
+
+### 2.6 — Inscribir estudiante en el curso (PROFESSOR)
+
+```http
+POST /api/courses/$course_id/enrollments
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{ "studentEmail": "estud.manual@univ.edu" }
+```
+
+Devuelve el `enrollment` con resumen del estudiante y del curso. Sólo el profesor dueño del curso puede inscribir.
+
+### 2.7 — Crear reto SQL (PROFESSOR)
+
+```http
+POST /api/challenges
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{
+  "title": "Clientes en Bogotá (manual)",
+  "description": "Devuelve los nombres de los clientes cuya ciudad sea Bogotá.",
+  "difficulty": "EASY",
+  "tags": ["SELECT", "WHERE"],
+  "databaseEngine": "postgresql",
+  "timeLimit": 3000,
+  "courseId": "$course_id"
+}
+```
+
+Devuelve el `challenge` con `id` (`$challenge_id`). El reto nace en `status: "draft"` — todavía no es visible para estudiantes.
+
+### 2.8 — Cargar schema del reto (PROFESSOR)
+
+```http
+PUT /api/challenges/$challenge_id/schema
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{
+  "ddl": "CREATE TABLE customers (id INT PRIMARY KEY, name VARCHAR(100), city VARCHAR(80));"
+}
+```
+
+El servicio parsea el DDL con `node-sql-parser`, valida que sólo haya `CREATE TABLE` (rechaza `DROP`, `ALTER`, `DELETE`, `INSERT`, `CREATE INDEX/VIEW/FUNCTION/TRIGGER`, etc.) y persiste `parsedTables` con metadata estructurada (columnas, tipos normalizados, PKs, FKs).
+
+### 2.9 — Cargar test data (PROFESSOR)
+
+Dos variantes según el contexto.
+
+**Variante manual** (INSERT directos, datos exactos):
+
+```http
+POST /api/challenges/$challenge_id/test-data/manual
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{
+  "name": "dataset-base",
+  "sql": "INSERT INTO customers (id, name, city) VALUES (1, 'Ana López', 'Bogotá'), (2, 'Beto García', 'Medellín'), (3, 'Carla Romero', 'Cali'), (4, 'Diego Vargas', 'Bogotá'), (5, 'Elena Mora', 'Cali');"
+}
+```
+
+**Variante generador** (faker con presets semánticos y FKs en orden topológico):
+
+```http
+POST /api/challenges/$challenge_id/test-data/generate
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{
+  "name": "dataset-generado",
+  "tables": [
+    {
+      "table": "customers",
+      "rows": 500,
+      "seed": 1,
+      "fields": {
+        "name": { "type": "varchar", "preset": "name", "maxLength": 100 },
+        "city": {
+          "type": "enum",
+          "values": ["Bogotá", "Medellín", "Cali"],
+          "weights": [50, 30, 20]
+        }
+      }
+    }
+  ]
+}
+```
+
+El generador soporta `rows` arbitrario, `seed` para reproducibilidad, presets (`name`, `email`, `city`, `country`, `phone`, ...), `nullPercent`, `includeExtremes` para casos borde, y resuelve FKs en orden topológico.
+
+### 2.10 — Cargar resultado esperado (PROFESSOR)
+
+```http
+PUT /api/challenges/$challenge_id/expected-result
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{
+  "columns": ["name"],
+  "rows": [["Ana López"], ["Diego Vargas"]],
+  "orderSensitive": false,
+  "floatTolerance": 0
+}
+```
+
+El servicio valida que cada fila tenga la misma cardinalidad que `columns` y rechaza nombres de columnas duplicados (case-insensitive). Sin este paso, las submissions caen en `BadRequestException` antes de encolar.
+
+### 2.11 — Publicar reto (PROFESSOR)
+
+```http
+PATCH /api/challenges/$challenge_id/status
+Authorization: Bearer $profToken
+Content-Type: application/json
+
+{ "status": "published" }
+```
+
+Las transiciones permitidas viven en `challenges.service.ts:23-27`:
+
+```text
+draft     → published, archived
+published → archived
+archived  → (terminal)
+```
+
+Al intentar archivar un reto con submissions en `QUEUED` o `RUNNING`, el servicio responde `400 Bad Request` para evitar dejar evaluaciones huérfanas.
+
+Después de estos 11 pasos, el reto está publicado, visible para los estudiantes inscritos, y listo para recibir submissions (sección 3).
 
 ## 3. Enviar submission
 
