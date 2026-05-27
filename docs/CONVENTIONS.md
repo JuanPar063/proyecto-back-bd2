@@ -1,305 +1,173 @@
-# Convenciones del equipo — SQL Judge
+# Convenciones tecnicas - SQL Judge
 
-> **Owner:** Dayana Molina. Si algo aquí choca con tu PR, antes de saltártelo,
-> consúltalo en la daily.
+Estas convenciones aplican a la implementacion final del backend.
 
 ---
 
 ## 1. Nombres
 
-- **Carpetas y archivos**: `kebab-case`. Ejemplo: `prisma-user.repository.ts`.
-- **Clases**: `PascalCase`. `UsersService`, `JwtAuthGuard`.
-- **Variables y funciones**: `camelCase`.
-- **Constantes globales / tokens DI**: `UPPER_SNAKE_CASE`. Ej: `USER_REPOSITORY`.
-- **Módulos Nest**: `<Context>Module` (`AuthModule`, `CoursesModule`).
-- **DTOs**: `<Acción><Entidad>Dto` (`CreateCourseDto`, `UpdateChallengeDto`).
-- **Puertos del dominio**: `<Entidad>Repository` (interfaz) + token `Symbol` exportado.
+- Carpetas y archivos: `kebab-case`.
+- Clases: `PascalCase`.
+- Variables y funciones: `camelCase`.
+- Constantes y tokens DI: `UPPER_SNAKE_CASE`.
+- Modulos Nest: `<Context>Module`.
+- DTOs: `<Accion><Entidad>Dto`.
+- Repositorios de dominio: `<Entidad>Repository`.
 
 ---
 
-## 2. Estructura de un módulo
+## 2. Estructura por modulo
 
-```
+```text
 modules/<context>/
 ├── domain/
-│   ├── <entidad>.entity.ts       # entidad pura, sin decoradores de infra
-│   └── <entidad>.repository.ts   # puerto + Symbol token
-├── application/
-│   ├── dto/                      # DTOs con class-validator + ApiProperty
-│   └── <context>.service.ts      # orquestación, NO toca Prisma directamente
-├── infrastructure/
-│   └── prisma-<entidad>.repository.ts
-├── presentation/
-│   └── <context>.controller.ts   # @Controller + @ApiTags
-└── <context>.module.ts
-```
-
-**Reglas duras:**
-- Un controller solo llama a un service.
-- Un service solo llama a repositorios (vía puerto) y a otros services.
-- Si un service necesita un dato de Prisma "rápido", crear método en repo.
-  No usar `PrismaService` desde la capa de aplicación (excepto en stubs
-  marcados con TODO).
-
----
-
-## 2.1. Casos de uso (Use Cases)
-
-Para mantener una separación más estricta de responsabilidades dentro de
-Clean Architecture, los flujos principales del negocio deben implementarse
-como casos de uso explícitos.
-
-Estructura sugerida:
-
-modules/<context>/
+│   ├── <entity>.entity.ts
+│   └── <entity>.repository.ts
 ├── application/
 │   ├── dto/
 │   ├── use-cases/
-│   │   ├── create-course.use-case.ts
-│   │   ├── publish-challenge.use-case.ts
-│   │   └── submit-sql.use-case.ts
-│   └── services/
+│   └── <context>.service.ts
+├── infrastructure/
+│   └── prisma-<entity>.repository.ts
+├── presentation/
+│   └── <context>.controller.ts
+└── <context>.module.ts
+```
 
 Reglas:
-- Un Use Case representa una acción concreta del negocio.
-- Los controllers llaman Use Cases o Services de aplicación.
-- Un Use Case no debe depender de Prisma directamente.
-- Los Use Cases pueden orquestar múltiples repositorios o puertos.
-- Mantener lógica de negocio fuera de controllers.
 
-
----
-
-## 3. DTOs
-
-- Usar `class-validator` para validar.
-- Usar `class-transformer` (`@Type`) para `Number` y nested objects.
-- Anotar todos los campos con `@ApiProperty` o `@ApiPropertyOptional` para que
-  Swagger los recoja.
-- Nunca exponer hashes/passwords en respuestas. Si la entidad tiene `passwordHash`,
-  filtrarlo manualmente o vía `class-transformer @Exclude`.
+- Controllers solo coordinan HTTP, DTOs, guards y servicios/casos de uso.
+- La logica de negocio vive en application/domain.
+- Infrastructure implementa persistencia, cache, colas, runner o clientes externos.
+- Los modulos pueden usar Prisma directamente cuando no existe puerto formal, pero no desde controllers.
+- Las reglas compartidas de transicion, scoring y contratos deben vivir en `shared/` o documentarse en `docs/CONTRACTS.md`.
 
 ---
 
-## 4. Formato de respuesta
+## 3. DTOs y Swagger
 
-**Éxito**: el body es directamente la entidad o `{ data, meta }` para listados
-paginados (ver `PaginationQueryDto`).
+- Validar entrada con `class-validator`.
+- Transformar tipos con `class-transformer`.
+- Documentar campos con `@ApiProperty` o `@ApiPropertyOptional`.
+- No exponer `passwordHash`, refresh tokens ni JWT completos.
+- Cada controller debe tener `@ApiTags`.
+- Endpoints protegidos deben usar `@ApiBearerAuth`.
 
-**Error** (lo emite `HttpExceptionFilter`):
+---
+
+## 4. Respuestas y errores
+
+Respuesta de exito:
+
+- Entidad directa para operaciones simples.
+- `{ data, meta }` para listados paginados cuando aplique.
+
+Formato de error:
 
 ```json
 {
   "statusCode": 400,
-  "message": "El email ya está registrado",
-  "error": "Conflict",
-  "path": "/api/users",
-  "timestamp": "2026-05-04T12:34:56.000Z"
+  "message": "Detalle del error",
+  "error": "Bad Request",
+  "path": "/api/...",
+  "timestamp": "2026-05-27T00:00:00.000Z"
 }
 ```
 
-`message` puede ser `string` o `string[]` (caso típico de errores de validación
-de class-validator). Los clientes deben tolerar ambos.
+---
+
+## 5. Autenticacion y autorizacion
+
+- Publicos: `/auth/register`, `/auth/login`, `/auth/refresh`, `/health`.
+- Protegidos: usar `JwtAuthGuard` y `RolesGuard`.
+- Roles validos: `ADMIN`, `PROFESSOR`, `STUDENT`.
+- Obtener usuario autenticado con `@CurrentUser()`.
+- No confiar en `userId` enviado por body para autorizacion.
 
 ---
 
-## 5. Autenticación / autorización
+## 6. API
 
-- **Endpoints públicos**: `/auth/register`, `/auth/login`, `/auth/refresh`, `/health`.
-- **Resto**: protegidos con `@UseGuards(JwtAuthGuard, RolesGuard)`.
-- Restringir por rol con `@Roles(Role.PROFESSOR, ...)`.
-- Para acceder al usuario autenticado dentro de un controller, usar el
-  decorador `@CurrentUser()` (`auth/infrastructure/decorators/current-user.decorator`).
-- Nunca confiar en `userId` que venga en el body para autorización: tomarlo del JWT.
+El prefijo global se controla con `API_PREFIX`. El valor por defecto del proyecto es:
+
+```text
+/api
+```
+
+Si se requiere versionamiento externo, puede configurarse:
+
+```env
+API_PREFIX=api/v1
+```
+
+Los documentos y Swagger deben reflejar el prefijo configurado.
 
 ---
 
-## 5.1. Jobs y procesamiento asíncrono
+## 7. Procesamiento asincrono
 
-La plataforma usa BullMQ + Redis para procesamiento asíncrono.
-
-Convenciones:
-- Nombre de jobs:
-  `<context>.<action>`
-
-Ejemplos:
-- `submissions.evaluate`
-- `recommendations.generate`
-- `runner.cleanup`
-
-Payloads:
-- Los payloads deben ser tipados.
-- Evitar enviar objetos gigantes en cola.
-- Preferir IDs y cargar información desde DB dentro del worker.
+La plataforma usa BullMQ y Redis.
 
 Reglas:
-- Los jobs nunca deben ejecutar lógica HTTP.
-- Los workers son responsables de:
-  - actualizar estados,
-  - manejar retries,
-  - persistir resultados,
-  - registrar errores.
+
+- Jobs pequenos; enviar IDs y cargar contexto desde PostgreSQL.
+- El job de submissions usa `{ submissionId }`.
+- El worker actualiza estados y persiste resultados.
+- Los errores terminales deben quedar reflejados en `Submission.status`.
+- Jobs agotados pueden enviarse a `failed-submissions` para inspeccion admin.
 
 ---
 
-## 6. Errores
+## 8. Seguridad SQL
 
-- **Domain**: lanzar subclases de `DomainException` (ver
-  `shared/domain/domain.exception.ts`).
-- **Application**: cuando se cruza la frontera HTTP, traducir a
-  `BadRequestException`, `NotFoundException`, `ForbiddenException`,
-  `ConflictException`, etc. (built-in de Nest).
-- **No** lanzar `Error` genérico desde la capa de aplicación.
-
----
-
-
-## 6.1. Seguridad SQL
-
-Toda consulta SQL enviada por estudiantes debe considerarse no confiable.
-
-Reglas obligatorias:
-- Nunca ejecutar SQL directamente desde requests HTTP.
-- Toda ejecución SQL debe pasar por Redis + Worker + Runner aislado.
-- Validar el AST SQL antes de ejecutar.
-- Bloquear:
-  - DROP
-  - DELETE
-  - UPDATE
-  - ALTER
-  - TRUNCATE
-  - CREATE USER
-  - GRANT
-  - REVOKE
-
-- Solo se permiten consultas SELECT en la evaluación automática.
-- Toda evaluación debe tener:
-  - timeout,
-  - límites de memoria,
-  - límites de CPU.
-
-- El Runner SQL nunca debe usar la base principal de la plataforma.
-- Cada evaluación debe ejecutarse en contenedores efímeros.
+- Nunca ejecutar SQL de estudiantes desde la API.
+- Nunca ejecutar SQL de estudiantes en la base principal.
+- Toda evaluacion pasa por Redis, worker y runner Docker.
+- Solo permitir `SELECT` o `WITH ... SELECT`.
+- Bloquear `DROP`, `DELETE`, `UPDATE`, `ALTER`, `TRUNCATE`, `INSERT`, `CREATE`, `COPY`, `GRANT` y `REVOKE`.
+- Aplicar timeout, CPU y memoria.
+- Destruir el contenedor temporal al finalizar.
 
 ---
 
-## 7. Git / PRs
+## 9. Reportes
 
-- Ramas: `feature/<modulo>-<descripcion>`. Ej: `feature/courses-enrollments`.
-- Base: `dev`. Solo se mergea a `main` al cierre de entrega.
-- **Conventional Commits** OBLIGATORIO (la rúbrica evalúa contribución por commits):
-  - `feat:` nueva funcionalidad
-  - `fix:` bug
-  - `docs:` documentación
-  - `refactor:` cambio sin alterar comportamiento
-  - `test:` solo tests
-  - `chore:` infra, deps, build
-  - `wip:` evitar; si lo usas, no lo mergees a `dev`.
-- Cada PR debe ser revisado por **al menos otro integrante** antes de mergear.
-- En el PR: descripción corta + lista de cambios + cómo probarlo + capturas si aplica.
+- Los reportes se calculan desde submissions persistidos.
+- Redis se usa como cache de TTL corto.
+- El leaderboard no depende del runner ni de datos temporales.
+- Nuevas metricas deben documentarse en `docs/REPORTS.md`.
 
 ---
 
-## 8. Swagger
+## 10. Tests
 
-- Cada controller lleva `@ApiTags(...)`.
-- Cada handler lleva `@ApiOperation({ summary: '...' })`.
-- Si el endpoint requiere auth: `@ApiBearerAuth()` a nivel controller.
-- DTOs con `@ApiProperty` para que aparezcan los ejemplos.
+Prioridades de prueba:
 
----
+- Servicios de application.
+- Transiciones de submissions.
+- Comparador de resultados.
+- Calculador de score.
+- Evaluaciones e intentos.
+- Reglas del AI Assistant.
+- Reportes y leaderboard.
 
-## 9. Tests
-
-- Para Entrega 1, mínimo **1 colección Postman / archivo `.http`** por módulo.
-  Vivirá en `test/postman/` o equivalente.
-- Para Entrega 2: tests unitarios de `application/*.service.ts` con mocks de
-  los puertos.
-- Nunca testear endpoints golpeando la DB real fuera de un docker compose dedicado.
+No usar una base compartida real para tests destructivos.
 
 ---
 
-## 9.1. Logging y trazabilidad
+## 11. Git y PRs
 
-Reglas:
-- No usar `console.log`.
-- Usar `Logger` de NestJS.
-- Los logs deben incluir:
-  - timestamp,
-  - contexto,
-  - nivel,
-  - correlationId.
-
-- Cada submission debe tener un `correlationId`
-  para rastrear:
-  API → Queue → Worker → Runner.
-
-Niveles sugeridos:
-- `log`: eventos normales.
-- `warn`: comportamiento inesperado recuperable.
-- `error`: fallos críticos.
-- `debug`: solo desarrollo local.
-
-Nunca loggear:
-- passwords,
-- refresh tokens,
-- JWTs completos.
+- Ramas: `feature/<modulo>-<descripcion>` o `fix/<modulo>-<descripcion>`.
+- Commits recomendados: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
+- Cada PR debe indicar cambios, pruebas y riesgos.
+- Cambios de contratos deben actualizar `docs/CONTRACTS.md`.
 
 ---
 
-## 10. Variables de entorno
+## 12. Variables de entorno
 
-- Todo lo que cambia entre entornos va a `.env`.
-- Cada nueva variable se añade a `.env.example` Y a la clase `EnvVars` en
-  `shared/infrastructure/config/env.validation.ts` para que falle rápido si
-  está mal configurada.
+Cada variable nueva debe agregarse a:
 
----
-
-## 11. Transacciones
-
-Cuando una operación afecte múltiples entidades relacionadas,
-usar `prisma.$transaction`.
-
-Ejemplos:
-- Crear curso + enrollments.
-- Crear reto + esquema + dataset.
-- Guardar submission + resultado + recomendaciones.
-
-Evitar estados parcialmente persistidos.
-
----
-
-## 12. Versionado API
-
-La API debe exponerse bajo:
-
-/api/v1
-
-Ejemplos:
-- `/api/v1/auth/login`
-- `/api/v1/courses`
-- `/api/v1/challenges`
-
-Cambios incompatibles deben crear nueva versión.
-
----
-
-## 13. Paginación
-
-Endpoints listados deben soportar:
-
-?page=1&limit=10
-
-Formato estándar:
-
-```json
-{
-  "data": [],
-  "meta": {
-    "page": 1,
-    "limit": 10,
-    "total": 100,
-    "totalPages": 10
-  }
-}
+- `.env.example`
+- `src/shared/infrastructure/config/env.validation.ts`
+- README si es necesaria para operar la entrega.
