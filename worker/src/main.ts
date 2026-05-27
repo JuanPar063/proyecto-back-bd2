@@ -1,29 +1,23 @@
 /**
  * ============================================================
- * Worker SQL — Entrega 2 (stub-evaluator, pre-runner)
+ * Worker SQL — Runner REAL con Docker (Entrega 2)
  * ============================================================
+ * Consume submissions de la cola Redis (BullMQ). Por cada submission:
  *
- * Consume de la cola "submissions" en Redis. Mantiene la
- * estructura del Entregable 1 (BullMQ + Prisma) pero ya invoca
- * el comparador y el scoring real implementados por Ruiz, para
- * que el resto del equipo pueda probar el flujo end-to-end antes
- * de que Jose conecte el Runner SQL en Docker.
+ *  1. Obtiene datos: Challenge (schema, seed, expectedResult)
+ *  2. Crea contenedor PostgreSQL temporal
+ *  3. Espera a que PostgreSQL esté listo (TCP + health check)
+ *  4. Ejecuta: DDL + Seed + Query del estudiante
+ *  5. Compara resultados vs expectedResult
+ *  6. Calcula score (60% correctness + 15% time + 10% practices)
+ *  7. Guarda resultados en DB (status, score, scoreBreakdown, resultData)
+ *  8. Destruye contenedor (siempre, incluso en error)
  *
- * Lo que ESTE archivo deja para Jose:
- *   1) Reemplazar `runQueryStub` por `DockerRunnerService.run(...)`
- *      con el contrato compartido `RunnerResult` (sección 5.2 del
- *      Plan_Entregable2): { status, executionTimeMs, rows, columns,
- *      errorMessage, explainPlan }.
- *   2) Manejar SYNTAX_ERROR / RUNTIME_ERROR / TIME_LIMIT_EXCEEDED
- *      según lo que devuelva el runner.
+ * Documentado en docs/RUNNER.md.
  *
- * Lo que ESTE archivo deja para Pardo:
- *   - El paso "ai recommendation" está marcado con TODO. Cuando
- *     el módulo ai-assistant esté listo, llamarlo aquí entre la
- *     comparación y el cálculo de score.
- *
- * Ejecutar local:    npm run worker:dev
- * Ejecutar Docker:   docker compose up worker
+ * Ejecución:
+ *   npm run worker:dev      (desarrollo local con ts-node)
+ *   docker compose up worker  (producción)
  * ============================================================
  */
 
@@ -346,11 +340,14 @@ async function getEvaluationContext(submissionId: string): Promise<EvaluationCon
       challenge: {
         include: {
           schema: true,
-          // FIX P0: incluir el dataset más antiguo del reto (el seed real)
+          // Incluir el dataset más antiguo del reto (el seed real)
           testDatasets: {
             orderBy: { createdAt: 'asc' },
             take: 1,
           },
+          // El resultado esperado es una relación 1-a-0..1 (modelo ExpectedResult,
+          // con columns[] + rows[][] + orderSensitive + floatTolerance).
+          expectedResult: true,
         },
       },
       student: {
@@ -363,11 +360,23 @@ async function getEvaluationContext(submissionId: string): Promise<EvaluationCon
     throw new Error('Challenge no tiene schema definido');
   }
 
-  // FIX P0: validar que haya TestDataset con SQL
   const dataset = submission.challenge.testDatasets[0];
   if (!dataset || !dataset.sql) {
     throw new Error(
       'Challenge no tiene TestDataset cargado; el runner no puede sembrar datos.',
+    );
+  }
+
+  // Convertir el ExpectedResult (columns + rows paralelos) al formato que espera
+  // el comparator: array<Object> donde cada fila es un objeto {col: value}.
+  // Si no hay expected cargado, queda como [] y el comparator detectará el mismatch.
+  const expectedRow = submission.challenge.expectedResult;
+  let expectedResult: any[] = [];
+  if (expectedRow) {
+    const cols = expectedRow.columns;
+    const rows = (expectedRow.rows as unknown as any[][]) ?? [];
+    expectedResult = rows.map((row) =>
+      Object.fromEntries(cols.map((col, i) => [col, row[i]])),
     );
   }
 
@@ -382,9 +391,9 @@ async function getEvaluationContext(submissionId: string): Promise<EvaluationCon
     challengeId: submission.challengeId,
     challengeTimeLimit: submission.challenge.timeLimit,
     schemaSql: submission.challenge.schema.ddl,
-    seedSql: dataset.sql,  // FIX P0: ahora sí trae los INSERTs del TestDataset
+    seedSql: dataset.sql,
     studentQuery: submission.query,
-    expectedResult: submission.challenge.expectedResult as any[] | null | undefined,
+    expectedResult,
     databaseEngine: submission.challenge.databaseEngine as any,
   };
 }

@@ -114,7 +114,6 @@ model Challenge {
   status         ChallengeStatus @default(draft)
   courseId       String
   createdById    String
-  expectedResult Json?           // Resultado esperado en formato JSON (array de objetos)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
@@ -200,24 +199,28 @@ enum EvaluationResultsVisibility {
 }
 
 model Submission {
-  id              String           @id @default(uuid())
-  studentId       String
-  challengeId     String
-  engine          DatabaseEngine   @default(postgresql)
-  engineVersion   String?
-  query           String           @db.Text
-  status          SubmissionStatus @default(QUEUED)
-  score           Int?
-  executionTimeMs Int?
-  errorMessage    String?          @db.Text
-  feedback        String?          @db.Text
-  runnerMetadata  Json?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id                  String           @id @default(uuid())
+  studentId           String
+  challengeId         String
+  evaluationAttemptId String?
+  engine              DatabaseEngine   @default(postgresql)
+  engineVersion       String?
+  query               String           @db.Text
+  status              SubmissionStatus @default(QUEUED)
+  score               Int?
+  scoreBreakdown      Json?
+  executionTimeMs     Int?
+  errorMessage        String?          @db.Text
+  feedback            String?          @db.Text
+  runnerMetadata      Json?
+  resultData          Json?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
-  student   User      @relation(fields: [studentId], references: [id])
-  challenge Challenge @relation(fields: [challengeId], references: [id])
-  recommendations Recommendation[]
+  student           User               @relation(fields: [studentId], references: [id])
+  challenge         Challenge          @relation(fields: [challengeId], references: [id])
+  evaluationAttempt EvaluationAttempt? @relation(fields: [evaluationAttemptId], references: [id], onDelete: SetNull)
+  recommendations   Recommendation[]
 
   @@index([studentId, challengeId])
   @@index([evaluationAttemptId])

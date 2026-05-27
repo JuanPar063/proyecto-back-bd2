@@ -65,6 +65,10 @@ export class DockerService {
           CpuPeriod: 100000,
           // Reinicia automáticamente si falla (máximo 3 intentos)
           RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 0 },
+          // El contenedor temporal debe vivir en la misma red del worker
+          // para que el TCP healthcheck pueda alcanzarlo; si no se setea,
+          // cae en la red `bridge` por defecto (aislada del worker).
+          NetworkMode: process.env.RUNNER_NETWORK || undefined,
         },
         Healthcheck: {
           Test: [

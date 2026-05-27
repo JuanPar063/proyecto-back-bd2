@@ -77,6 +77,9 @@ services:
       dockerfile: Dockerfile
     container_name: sqljudge-worker
     restart: unless-stopped
+    # Necesario para acceder a /var/run/docker.sock del host y crear
+    # contenedores PostgreSQL temporales (runner SQL).
+    user: root
     mem_limit: 384m
     cpus: 0.5
     env_file: .env
@@ -85,6 +88,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       DOCKER_HOST: unix:///var/run/docker.sock
+      # Red en la que se lanzan los contenedores temporales del runner SQL.
+      # Debe coincidir con la red definida abajo (incluyendo el prefijo del
+      # proyecto que docker-compose le agrega).
+      RUNNER_NETWORK: proyecto-back-bd2_sqljudge
     depends_on:
       postgres:
         condition: service_healthy

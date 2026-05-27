@@ -4,8 +4,12 @@ exports.EVALUATIONS_QUEUE = exports.SUBMISSIONS_QUEUE = void 0;
 require("reflect-metadata");
 const bullmq_1 = require("bullmq");
 const client_1 = require("@prisma/client");
-const result_comparator_1 = require("./evaluator/result-comparator");
-const score_calculator_1 = require("./evaluator/score-calculator");
+const logger_1 = require("./utils/logger");
+const docker_service_1 = require("./docker/docker.service");
+const postgres_health_service_1 = require("./docker/postgres-health.service");
+const sql_executor_service_1 = require("./docker/sql-executor.service");
+const result_comparator_1 = require("./evaluation/result-comparator");
+const score_calculator_1 = require("./evaluation/score-calculator");
 const prisma = new client_1.PrismaClient();
 const mainLogger = (0, logger_1.createLogger)('Worker');
 const connection = {
@@ -22,175 +26,148 @@ const CONTAINER_CONFIG = {
 };
 new bullmq_1.Queue(exports.SUBMISSIONS_QUEUE, { connection });
 new bullmq_1.Queue(exports.EVALUATIONS_QUEUE, { connection });
-async function runQueryStub(query, expected) {
-    await new Promise((r) => setTimeout(r, 100));
-    if (/expect:\s*TIMEOUT/i.test(query)) {
-        return {
-            status: 'TIMEOUT',
-            executionTimeMs: 99999,
-            rows: [],
-            columns: [],
-            errorMessage: '[stub] Forzado por marcador expect:TIMEOUT',
-            explainPlan: null,
-        };
-    }
-    if (/expect:\s*SYNTAX/i.test(query)) {
-        return {
-            status: 'SYNTAX_ERROR',
-            executionTimeMs: 0,
-            rows: [],
-            columns: [],
-            errorMessage: '[stub] Forzado por marcador expect:SYNTAX',
-            explainPlan: null,
-        };
-    }
-    if (/expect:\s*RUNTIME/i.test(query)) {
-        return {
-            status: 'RUNTIME_ERROR',
-            executionTimeMs: 50,
-            rows: [],
-            columns: [],
-            errorMessage: '[stub] Forzado por marcador expect:RUNTIME',
-            explainPlan: null,
-        };
-    }
-    if (/expect:\s*WRONG/i.test(query)) {
-        return {
-            status: 'OK',
-            executionTimeMs: 120,
-            rows: [],
-            columns: expected.columns,
-            errorMessage: null,
-            explainPlan: null,
-        };
-    }
-    return {
-        status: 'OK',
-        executionTimeMs: 120 + Math.floor(Math.random() * 200),
-        rows: expected.rows,
-        columns: expected.columns,
-        errorMessage: null,
-        explainPlan: null,
-    };
-}
-function deriveStatus(runner, comparisonOk) {
-    if (runner.status === 'TIMEOUT')
-        return client_1.SubmissionStatus.TIME_LIMIT_EXCEEDED;
-    if (runner.status === 'SYNTAX_ERROR')
-        return client_1.SubmissionStatus.SYNTAX_ERROR;
-    if (runner.status === 'RUNTIME_ERROR')
-        return client_1.SubmissionStatus.RUNTIME_ERROR;
-    if (comparisonOk === true)
-        return client_1.SubmissionStatus.ACCEPTED;
-    return client_1.SubmissionStatus.WRONG_ANSWER;
-}
-async function processSubmission(submissionId) {
-    const submission = await prisma.submission.findUnique({
-        where: { id: submissionId },
-        include: {
-            challenge: {
-                select: {
-                    id: true,
-                    timeLimit: true,
-                    databaseEngine: true,
-                    expectedResult: true,
-                },
-            },
-        },
-    });
-    if (!submission) {
-        console.warn(`[worker] Submission ${submissionId} no existe; descartando`);
-        return;
-    }
-    if (submission.status !== client_1.SubmissionStatus.QUEUED) {
-        console.warn(`[worker] Submission ${submissionId} no está QUEUED (${submission.status}); descartando`);
-        return;
-    }
-    await prisma.submission.update({
-        where: { id: submissionId },
-        data: { status: client_1.SubmissionStatus.RUNNING },
-    });
-    const expectedRow = submission.challenge.expectedResult;
-    if (!expectedRow) {
-        await prisma.submission.update({
-            where: { id: submissionId },
-            data: {
-                status: client_1.SubmissionStatus.RUNTIME_ERROR,
-                errorMessage: 'El reto no tiene ExpectedResult cargado; no se puede evaluar.',
-            },
-        });
-        return;
-    }
-    const expected = {
-        columns: expectedRow.columns,
-        rows: expectedRow.rows,
-        orderSensitive: expectedRow.orderSensitive,
-        floatTolerance: expectedRow.floatTolerance,
-    };
-    const runner = await runQueryStub(submission.query, expected);
-    let comparisonOk = null;
-    let feedback = '';
-    if (runner.status === 'OK') {
-        const actual = {
-            columns: runner.columns,
-            rows: runner.rows,
-        };
-        const verdict = (0, result_comparator_1.compareResults)(expected, actual);
-        comparisonOk = verdict.ok;
-        feedback = (0, result_comparator_1.describeVerdict)(verdict);
-    }
-    else {
-        feedback = runner.errorMessage ?? `Runner status: ${runner.status}`;
-    }
-    const finalStatus = deriveStatus(runner, comparisonOk);
-    const breakdown = (0, score_calculator_1.calculateScore)({
-        status: finalStatus,
-        executionTimeMs: runner.executionTimeMs,
-        timeLimitMs: submission.challenge.timeLimit,
-        aiQualityScore: null,
-    });
-    await prisma.submission.update({
-        where: { id: submissionId },
-        data: {
-            status: finalStatus,
-            score: breakdown.total,
-            executionTimeMs: runner.executionTimeMs,
-            errorMessage: runner.errorMessage,
-            feedback,
-            runnerMetadata: {
-                runnerStatus: runner.status,
-                rowCount: runner.rows.length,
-                columnCount: runner.columns.length,
-                explainPlan: runner.explainPlan,
-                breakdown,
-            },
-        },
-    });
-    console.log(`[worker] submission=${submissionId} status=${finalStatus} score=${breakdown.total} timeMs=${runner.executionTimeMs}`);
-}
 const worker = new bullmq_1.Worker(exports.SUBMISSIONS_QUEUE, async (job) => {
     const { submissionId } = job.data;
-    console.log(`[worker] Procesando submission=${submissionId}`);
+    mainLogger.info(`\n${'='.repeat(60)}`);
+    mainLogger.info(`Procesando submission: ${submissionId}`);
+    mainLogger.info(`${'='.repeat(60)}`);
+    let containerId = null;
     try {
-        await processSubmission(submissionId);
+        mainLogger.info('FASE 1: Obteniendo datos del submission...');
+        const evaluationContext = await getEvaluationContext(submissionId);
+        await prisma.submission.update({
+            where: { id: submissionId },
+            data: { status: client_1.SubmissionStatus.RUNNING },
+        });
+        mainLogger.info('FASE 2: Creando contenedor PostgreSQL...');
+        containerId = await docker_service_1.dockerService.createPostgresContainer(submissionId, CONTAINER_CONFIG);
+        mainLogger.info('FASE 3: Esperando a que PostgreSQL esté listo...');
+        const containerIp = await docker_service_1.dockerService.getContainerIp(containerId);
+        const isReady = await postgres_health_service_1.postgresHealthCheckService.waitForPostgresReady(containerIp, 5432, 30, 60000);
+        if (!isReady) {
+            throw new Error('PostgreSQL no estuvo listo en el tiempo establecido');
+        }
+        mainLogger.info('FASE 4: Conectando a PostgreSQL y ejecutando SQL...');
+        await sql_executor_service_1.sqlExecutorService.connect(containerIp, 5432, 'eval_db', 'eval_user', 'eval_password', CONTAINER_CONFIG.timeout);
+        const sqlResult = await sql_executor_service_1.sqlExecutorService.executeFullPipeline(evaluationContext.schemaSql, evaluationContext.seedSql, evaluationContext.studentQuery, evaluationContext.challengeTimeLimit);
+        if (!sqlResult.success) {
+            mainLogger.warn(`Error SQL: ${sqlResult.error}`);
+            let status;
+            if (sqlResult.error?.includes('TIME_LIMIT_EXCEEDED')) {
+                status = client_1.SubmissionStatus.TIME_LIMIT_EXCEEDED;
+            }
+            else if (sqlResult.error?.includes('SYNTAX_ERROR')) {
+                status = client_1.SubmissionStatus.SYNTAX_ERROR;
+            }
+            else {
+                status = client_1.SubmissionStatus.RUNTIME_ERROR;
+            }
+            await prisma.submission.update({
+                where: { id: submissionId },
+                data: {
+                    status,
+                    errorMessage: sqlResult.error,
+                    executionTimeMs: sqlResult.executionTimeMs,
+                },
+            });
+            mainLogger.warn(`Submission finalizado con status: ${status}`);
+            return;
+        }
+        mainLogger.info('FASE 6: Comparando resultados...');
+        const comparisonResult = result_comparator_1.resultComparatorService.compare({
+            rows: sqlResult.rows,
+            columns: sqlResult.columns,
+        }, evaluationContext.expectedResult ?? []);
+        let aiQualityScore = null;
+        try {
+            const apiUrl = process.env.API_URL ?? 'http://api:3000/api';
+            const resp = await fetch(`${apiUrl}/ai-assistant/analyze`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    query: evaluationContext.studentQuery,
+                    schemaDdl: evaluationContext.schemaSql,
+                    executionTimeMs: sqlResult.executionTimeMs,
+                    explainPlan: sqlResult.explainPlan,
+                    status: comparisonResult.isCorrect ? 'ACCEPTED' : 'WRONG_ANSWER',
+                }),
+            });
+            if (resp.ok) {
+                const ai = await resp.json();
+                aiQualityScore = ai['qualityScore'] ?? null;
+                mainLogger.info('Asistente IA respondió ✓');
+            }
+            else {
+                mainLogger.warn(`Asistente IA respondió ${resp.status} — continuando sin IA`);
+            }
+        }
+        catch (e) {
+            mainLogger.warn(`Asistente IA no disponible: ${e.message} — continuando sin IA`);
+        }
+        mainLogger.info('FASE 7: Calculando puntuación...');
+        const scoreBreakdown = score_calculator_1.scoreCalculatorService.calculateScore({
+            correctness: comparisonResult,
+            executionTimeMs: sqlResult.executionTimeMs,
+            timeLimit: evaluationContext.challengeTimeLimit,
+            studentQuery: evaluationContext.studentQuery,
+            expectedRowCount: evaluationContext.expectedResult?.length ?? 0,
+            aiQualityScore,
+        });
+        const feedback = score_calculator_1.scoreCalculatorService.generateFeedback(scoreBreakdown, evaluationContext.studentQuery);
+        const finalStatus = comparisonResult.isCorrect
+            ? client_1.SubmissionStatus.ACCEPTED
+            : sqlResult.executionTimeMs > evaluationContext.challengeTimeLimit
+                ? client_1.SubmissionStatus.TIME_LIMIT_EXCEEDED
+                : client_1.SubmissionStatus.WRONG_ANSWER;
+        mainLogger.info('FASE 9: Guardando resultados en DB...');
+        const submission = await prisma.submission.update({
+            where: { id: submissionId },
+            data: {
+                status: finalStatus,
+                score: scoreBreakdown.final,
+                scoreBreakdown: scoreBreakdown,
+                resultData: sqlResult.rows,
+                executionTimeMs: sqlResult.executionTimeMs,
+                errorMessage: feedback,
+            },
+        });
+        mainLogger.success(`✅ Submission completado: ${finalStatus} (Score: ${scoreBreakdown.final}/100)`);
+        mainLogger.info(`Detalles: ${feedback}`);
+        return submission;
     }
-    catch (err) {
-        console.error(`[worker] Error en submission=${submissionId}:`, err);
+    catch (error) {
+        mainLogger.error(`ERROR general: ${error.message}`);
         try {
             await prisma.submission.update({
                 where: { id: submissionId },
                 data: {
                     status: client_1.SubmissionStatus.RUNTIME_ERROR,
-                    errorMessage: err.message ?? 'Error desconocido en el worker',
+                    errorMessage: `Worker error: ${error.message}`,
                 },
             });
         }
-        catch (e2) {
-            console.error('[worker] No se pudo marcar RUNTIME_ERROR:', e2);
+        catch (updateError) {
+            mainLogger.error(`No se pudo actualizar submission: ${updateError}`);
         }
-        throw err;
+        throw error;
     }
-}, { connection, concurrency: 2 });
+    finally {
+        if (containerId) {
+            mainLogger.info('CLEANUP: Destruyendo contenedor...');
+            try {
+                await sql_executor_service_1.sqlExecutorService.disconnect();
+                await docker_service_1.dockerService.destroyContainer(submissionId, true);
+                mainLogger.success('Contenedor destruido ✓');
+            }
+            catch (cleanupError) {
+                mainLogger.warn(`Error durante cleanup: ${cleanupError}`);
+            }
+        }
+    }
+}, {
+    connection,
+    concurrency: 2,
+});
 worker.on('failed', (job, err) => {
     mainLogger.error(`Job ${job?.id} falló: ${err?.message}`);
 });
@@ -227,6 +204,7 @@ async function getEvaluationContext(submissionId) {
                         orderBy: { createdAt: 'asc' },
                         take: 1,
                     },
+                    expectedResult: true,
                 },
             },
             student: {
@@ -241,6 +219,13 @@ async function getEvaluationContext(submissionId) {
     if (!dataset || !dataset.sql) {
         throw new Error('Challenge no tiene TestDataset cargado; el runner no puede sembrar datos.');
     }
+    const expectedRow = submission.challenge.expectedResult;
+    let expectedResult = [];
+    if (expectedRow) {
+        const cols = expectedRow.columns;
+        const rows = expectedRow.rows ?? [];
+        expectedResult = rows.map((row) => Object.fromEntries(cols.map((col, i) => [col, row[i]])));
+    }
     mainLogger.info(`Submission ID: ${submissionId}`);
     mainLogger.info(`Challenge: ${submission.challenge.title}`);
     mainLogger.info(`Estudiante: ${submission.studentId}`);
@@ -253,7 +238,7 @@ async function getEvaluationContext(submissionId) {
         schemaSql: submission.challenge.schema.ddl,
         seedSql: dataset.sql,
         studentQuery: submission.query,
-        expectedResult: submission.challenge.expectedResult,
+        expectedResult,
         databaseEngine: submission.challenge.databaseEngine,
     };
 }

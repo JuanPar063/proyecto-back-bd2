@@ -37,6 +37,7 @@ class DockerService {
                     CpuQuota: Math.round(resourceLimits.cpus * 100000),
                     CpuPeriod: 100000,
                     RestartPolicy: { Name: 'on-failure', MaximumRetryCount: 0 },
+                    NetworkMode: process.env.RUNNER_NETWORK || undefined,
                 },
                 Healthcheck: {
                     Test: [
