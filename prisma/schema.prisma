@@ -207,6 +207,7 @@ model Submission {
 
   student   User      @relation(fields: [studentId], references: [id])
   challenge Challenge @relation(fields: [challengeId], references: [id])
+  recommendations Recommendation[]
 
   @@index([studentId, challengeId])
   @@index([status])
@@ -235,4 +236,40 @@ model ExpectedResult {
   challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
 
   @@map("expected_results")
+}
+
+// ============================================================
+// RECOMMENDATIONS (Entrega 2 — módulo Pardo, Asistente IA)
+// Tabla separada (no campo JSON en Submission) por dos motivos:
+//   1) Evita choques de merge con migraciones de Submission.
+//   2) Permite historial: si una submission se re-evalúa, cada
+//      corrida del asistente queda registrada.
+// El shape de `warnings` y `qualityScore` está definido en
+// src/shared/contracts/ai-assistant.contract.ts (contrato 5.3) y
+// documentado en docs/CONTRACTS.md (sección 3).
+// ============================================================
+
+enum RuleSeverity {
+  info
+  warning
+  critical
+}
+
+model Recommendation {
+  id               String       @id @default(uuid())
+  submissionId     String
+  explanation      String       @db.Text
+  suggestedIndexes String[]
+  rewriteSql       String?      @db.Text
+  warnings         Json         // Array<RuleWarning>
+  impact           String       @db.Text
+  highestSeverity  RuleSeverity @default(info)
+  qualityScore     Json?        // AiQualityScore | null
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  submission Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@map("recommendations")
 }
