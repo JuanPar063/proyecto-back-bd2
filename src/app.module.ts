@@ -14,6 +14,7 @@ import { EvaluationsModule } from './modules/evaluations/evaluations.module';
 import { DemoModule } from './modules/demo/demo.module';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { ConfigService } from '@nestjs/config';
     TestDataModule,
     SubmissionsModule,
     EvaluationsModule,
+    ReportsModule,
     DemoModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],

@@ -1,0 +1,19 @@
+### Student report
+GET http://localhost:3000/api/reports/students/STUDENT_ID
+Authorization: Bearer TOKEN
+
+### Challenge report
+GET http://localhost:3000/api/reports/challenges/CHALLENGE_ID
+Authorization: Bearer TOKEN
+
+### Course report
+GET http://localhost:3000/api/reports/courses/COURSE_ID
+Authorization: Bearer TOKEN
+
+### Leaderboard by course
+GET http://localhost:3000/api/reports/leaderboard?courseId=COURSE_ID
+Authorization: Bearer TOKEN
+
+### Leaderboard by evaluation
+GET http://localhost:3000/api/reports/leaderboard?evaluationId=EVALUATION_ID
+Authorization: Bearer TOKEN
