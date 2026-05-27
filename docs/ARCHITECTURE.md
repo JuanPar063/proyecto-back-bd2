@@ -1,313 +1,409 @@
-# Arquitectura — SQL Judge
+# Arquitectura - SQL Judge
 
-> **Owner:** Dayana Molina (Líder de arquitectura).
-> Cualquier cambio significativo a este documento debe revisarse con el equipo
-> en la daily.
+> **Owner:** Dayana Molina, lider de arquitectura.
+> Este documento describe la arquitectura de la implementacion final del backend SQL Judge.
 
 ---
 
-## 1. Vista de despliegue (alto nivel)
+## 1. Contexto del sistema
+
+SQL Judge es una plataforma backend para crear cursos, retos SQL, datasets de prueba, resultados esperados, evaluaciones, submissions, reportes academicos y recomendaciones automaticas de mejora sobre consultas SQL.
+
+La implementacion final incluye los siguientes modulos NestJS:
+
+- `auth`
+- `users`
+- `courses`
+- `challenges`
+- `schemas`
+- `test-data`
+- `submissions`
+- `evaluations`
+- `ai-assistant`
+- `reports`
+- `demo`
+- `health`
+
+El sistema usa NestJS, Prisma, PostgreSQL, Redis, BullMQ, Docker Compose, JWT y un worker independiente ubicado en `worker/src`.
+
+---
+
+## 2. Vista de despliegue
 
 ```mermaid
 flowchart LR
-  subgraph Cliente
-    FE["Cliente HTTP / Postman"]
+  CLIENT["Cliente HTTP<br/>Postman / Swagger UI"]
+
+  subgraph DockerHost["Docker Host"]
+    subgraph Compose["Docker Compose"]
+      API["API NestJS<br/>REST + Swagger<br/>JWT Guards"]
+      PG[("PostgreSQL principal<br/>sqljudge")]
+      REDIS[("Redis 7<br/>BullMQ + Cache")]
+      WORKER["Worker SQL<br/>worker/src<br/>BullMQ consumer"]
+      REPORTS["Reports / Leaderboard<br/>servicio logico en API"]
+      AI["AI Assistant Service<br/>reglas + LLM opcional/stub"]
+    end
+
+    subgraph RunnerEnv["Runner SQL en Docker<br/>ambiente aislado por submission"]
+      RUNNER["PostgreSQL temporal<br/>schema + test data + query"]
+    end
   end
 
-  subgraph Compose["Docker Compose"]
-    API["API NestJS<br/>(Auth, Courses, Challenges, Schemas, TestData)"]
-    WORKER["Worker SQL<br/>(BullMQ consumer)"]
-    PG[("PostgreSQL 16<br/>sqljudge")]
-    PG_EVAL[("PostgreSQL 16<br/>sqljudge_eval")]
-    REDIS[("Redis 7")]
-    RUNNER["Runner SQL<br/>(Docker, Entrega 2)"]
-  end
-
-  FE -->|HTTP / JWT| API
+  CLIENT -->|HTTP / JWT| API
   API -->|Prisma| PG
-  API -->|enqueue| REDIS
-  WORKER -->|consume| REDIS
-  WORKER -->|update status| PG
-  WORKER -.->|spawn / Entrega 2| RUNNER
-  RUNNER -->|create temp DB| PG_EVAL
+  API -->|enqueue submission jobs| REDIS
+  API --> REPORTS
+  REPORTS -->|read/write TTL corto| REDIS
+  REPORTS -->|metricas persistidas| PG
+
+  REDIS -->|deliver jobs| WORKER
+  WORKER -->|update submission status/result| PG
+  WORKER -->|docker socket| RUNNER
+  WORKER -->|recommendation request| AI
+  AI -->|RecommendationRepository| PG
 ```
 
-Notas:
-- `sqljudge_eval` queda creado por `scripts/init-db.sql` y será usado por el
-  Runner SQL en la Entrega 2 para crear bases temporales por evaluación.
-- En Entrega 1 el worker es **stub**: solo simula el ciclo `QUEUED → RUNNING → ACCEPTED`.
+Notas operativas:
 
-### Mejoras pendientes para Entrega 2
+- La base principal `sqljudge` almacena usuarios, cursos, retos, schemas, datasets, resultados esperados, submissions, evaluaciones, reportes derivados y recomendaciones.
+- La base principal no ejecuta SQL enviado por estudiantes.
+- El SQL de estudiantes se ejecuta unicamente en el Runner SQL, dentro de un contenedor Docker temporal y aislado.
+- El runner aplica `SchemaScript`, carga `TestDataset`, ejecuta la query del estudiante y destruye el ambiente al finalizar.
+- El runner opera con limites de CPU, memoria y tiempo de ejecucion.
+- Redis se usa para BullMQ y para cache de reportes/leaderboard.
 
-- Agregar explícitamente el `AI Recommendation Service` como componente consumido por el Worker.
-- Representar el runner como un ambiente efímero, no como una base fija reutilizada.
-- Aclarar que `sqljudge_eval` solo sirve como base auxiliar o de preparación, pero no reemplaza el aislamiento por evaluación.
-- Documentar que la base principal `sqljudge` nunca ejecuta SQL enviado por estudiantes.
-- Añadir límites operativos del runner:
-  - timeout por evaluación,
-  - límite de memoria,
-  - límite de CPU,
-  - eliminación del contenedor al finalizar.
 ---
 
-## 2. Modelo de dominio
+## 3. Modelo de dominio
 
 ```mermaid
 classDiagram
   class User {
     +id: UUID
-    +email
-    +passwordHash
-    +fullName
+    +email: string
+    +passwordHash: string
+    +fullName: string
     +role: ADMIN | PROFESSOR | STUDENT
-    +isActive
+    +isActive: boolean
   }
+
   class Course {
-    +id
-    +name
-    +code
-    +period
-    +group
-    +professorId
-    +isActive
+    +id: UUID
+    +name: string
+    +code: string
+    +period: string
+    +groupName: string
+    +professorId: UUID
+    +isActive: boolean
   }
+
   class Enrollment {
-    +id
-    +courseId
-    +studentId
+    +id: UUID
+    +courseId: UUID
+    +studentId: UUID
+    +enrolledAt: DateTime
   }
+
   class Challenge {
-    +id
-    +title
-    +description
-    +difficulty
-    +tags[]
-    +databaseEngine
-    +timeLimit
+    +id: UUID
+    +title: string
+    +description: text
+    +difficulty: EASY | MEDIUM | HARD
+    +tags: string[]
+    +databaseEngine: postgresql | mysql | sqlite
+    +timeLimit: int
     +status: draft | published | archived
-    +courseId
-    +createdById
+    +courseId: UUID
+    +createdById: UUID
   }
+
   class SchemaScript {
-    +id
-    +challengeId
-    +ddl
-    +parsedTables
-    +version
+    +id: UUID
+    +challengeId: UUID
+    +ddl: text
+    +parsedTables: Json
+    +version: int
   }
+
   class TestDataset {
-    +id
-    +challengeId
-    +name
+    +id: UUID
+    +challengeId: UUID
+    +name: string
     +kind: MANUAL_INSERT | GENERATOR_CONFIG
-    +sql
-    +generatorConfig
+    +sql: text
+    +generatorConfig: Json
   }
+
+  class ExpectedResult {
+    +id: UUID
+    +challengeId: UUID
+    +columns: string[]
+    +rows: Json
+    +orderSensitive: boolean
+    +floatTolerance: float
+  }
+
   class Submission {
-    +id
-    +studentId
-    +challengeId
-    +query
-    +status
-    +score
-    +executionTimeMs
+    +id: UUID
+    +studentId: UUID
+    +challengeId: UUID
+    +evaluationAttemptId: UUID
+    +query: text
+    +status: SubmissionStatus
+    +score: int
+    +scoreBreakdown: Json
+    +executionTimeMs: int
+    +resultData: Json
   }
 
-  User "1" --> "0..*" Course : enseña
-  User "1" --> "0..*" Enrollment : inscrito
-  Course "1" --> "0..*" Enrollment
-  Course "1" --> "0..*" Challenge
-  User "1" --> "0..*" Challenge : autor
-  Challenge "1" --> "0..1" SchemaScript
-  Challenge "1" --> "0..*" TestDataset
-  Challenge "1" --> "0..*" Submission
-  User "1" --> "0..*" Submission : envía
+  class Recommendation {
+    +id: UUID
+    +submissionId: UUID
+    +explanation: text
+    +suggestedIndexes: string[]
+    +rewriteSql: text
+    +warnings: Json
+    +impact: text
+    +highestSeverity: info | warning | critical
+    +qualityScore: Json
+  }
+
+  class Evaluation {
+    +id: UUID
+    +name: string
+    +description: text
+    +courseId: UUID
+    +startDate: DateTime
+    +endDate: DateTime
+    +durationMinutes: int
+    +maxAttempts: int
+    +resultsVisibility: EvaluationResultsVisibility
+  }
+
+  class EvaluationChallenge {
+    +id: UUID
+    +evaluationId: UUID
+    +challengeId: UUID
+    +position: int
+  }
+
+  class EvaluationAttempt {
+    +id: UUID
+    +evaluationId: UUID
+    +studentId: UUID
+    +attemptNumber: int
+    +startedAt: DateTime
+    +endsAt: DateTime
+    +submittedAt: DateTime
+  }
+
+  User "1" --> "0..*" Course : ensena
+  User "1" --> "0..*" Enrollment : se inscribe mediante
+  Course "1" --> "0..*" Enrollment : tiene
+  Course "1" --> "0..*" Challenge : tiene
+  Course "1" --> "0..*" Evaluation : tiene
+
+  User "1" --> "0..*" Challenge : crea
+  Challenge "1" --> "0..1" SchemaScript : tiene
+  Challenge "1" --> "0..*" TestDataset : tiene
+  Challenge "1" --> "0..1" ExpectedResult : tiene
+  Challenge "1" --> "0..*" Submission : recibe
+
+  Evaluation "1" --> "0..*" EvaluationChallenge : agrupa
+  EvaluationChallenge "*" --> "1" Challenge : referencia
+  Evaluation "1" --> "0..*" EvaluationAttempt : tiene
+
+  EvaluationAttempt "1" --> "0..*" Submission : contiene
+  Submission "*" --> "1" User : pertenece a
+  Submission "*" --> "1" Challenge : pertenece a
+  Submission "1" --> "0..*" Recommendation : tiene
 ```
-### Entidades candidatas para completar el dominio
-
-Para cubrir completamente los módulos de evaluaciones, resultados y recomendaciones,
-se propone extender el modelo con las siguientes entidades en Entrega 2:
-
-- `Evaluation`: representa una evaluación o parcial compuesto por uno o varios retos.
-- `EvaluationChallenge`: tabla intermedia entre evaluaciones y retos.
-- `SubmissionTestResult`: detalle por caso de prueba ejecutado para un submission.
-- `Recommendation`: recomendaciones generadas por el asistente inteligente.
-- `ExecutionMetric`: métricas técnicas de ejecución como tiempo, memoria y estado del runner.
-
 
 ### Invariantes principales
 
-- `Course.code` es único por toda la plataforma (fácil de relajar a "único por
-  período" si el equipo lo decide; ver TODO en `Sofia` / Courses).
-- Solo el `professorId` del curso puede crear retos en él.
-- Un `Challenge` solo se puede archivar si no tiene submissions activas
-  (TODO Ruiz, validación en Entrega 2 cuando exista la cola real).
-- Transiciones de estado del reto:
-  `draft → published`, `draft → archived`, `published → archived`. Nada más.
-- `SchemaScript` es 1‑a‑1 con `Challenge`: si se sube uno nuevo, se incrementa `version`.
-- Un estudiante no puede enviar soluciones fuera de la ventana activa de una evaluación.
-- Cada evaluación debe respetar un máximo de intentos por estudiante y reto.
-- Un `Submission` solo debe evaluarse una vez.
-- Solo se permiten consultas `SELECT` durante la evaluación automática.
-- Toda consulta SQL debe validarse antes de enviarse al runner.
-- Los resultados esperados deben normalizarse antes de compararse con el resultado del estudiante.
-- Las recomendaciones de optimización deben quedar asociadas al `Submission` evaluado.
+- Solo profesores y administradores pueden crear cursos, retos, schemas, datasets y resultados esperados.
+- Un `Course` pertenece a un profesor mediante `professorId`.
+- Un estudiante se vincula a un curso mediante `Enrollment`.
+- Un `Challenge` pertenece a un curso y se publica solo cuando tiene los insumos necesarios.
+- Un `Challenge` puede tener un `SchemaScript`, multiples `TestDataset` y un `ExpectedResult`.
+- Un `ExpectedResult` existe como entidad separada para permitir comparacion deterministica.
+- Una `Evaluation` agrupa retos mediante `EvaluationChallenge`.
+- Una `EvaluationAttempt` representa el intento de un estudiante dentro de una evaluacion.
+- Una `Submission` pertenece a un estudiante y a un reto.
+- Una `Submission` puede pertenecer a una `EvaluationAttempt`.
+- Las `Recommendation` se persisten como entidad separada asociada a la submission evaluada.
+- El SQL de estudiantes nunca se ejecuta en la base principal.
+
 ---
 
-## 3. Vista de componentes (Clean Architecture)
+## 4. Vista de componentes - Clean Architecture
 
 ```mermaid
 flowchart TB
-
-  subgraph Presentation
-    Ctrl["REST Controllers<br/>(@Controller / DTOs / Swagger)"]
-    ReportsCtrl["Reports Controller"]
+  subgraph Presentation["Presentation"]
+    AuthCtrl["AuthController"]
+    CoursesCtrl["CoursesController"]
+    ChallengesCtrl["ChallengesController"]
+    SubmissionsCtrl["SubmissionsController"]
+    EvaluationsCtrl["EvaluationsController"]
+    ReportsCtrl["ReportsController"]
+    AiCtrl["AiAssistantController"]
+    SupportCtrl["Users / Schemas / TestData / Demo / Health Controllers"]
   end
 
-  subgraph Application
-    UC["Use cases / Services<br/>(orquestan dominio)"]
+  subgraph Application["Application"]
+    AuthUC["Auth Use Cases"]
+    CoursesUC["Courses Use Cases"]
+    ChallengesUC["Challenges Use Cases"]
+    SubmissionsUC["Submissions Use Cases"]
+    EvaluationsUC["Evaluations Use Cases"]
     ReportsUC["Reports Use Cases"]
-    DTOS["DTOs (validación)"]
+    AiUC["AI Assistant Use Cases"]
   end
 
-  subgraph Domain
-    Ent["Entidades + Value Objects"]
-    Ports["Puertos (interfaces)<br/>USER_REPOSITORY, ..."]
-    DomEx["DomainException"]
+  subgraph Domain["Domain"]
+    Entities["Entities"]
+    ValueObjects["Value Objects"]
+    Ports["Ports"]
+    DomainExceptions["Domain Exceptions"]
   end
 
-  subgraph Infrastructure
-    PrismaR["Adaptadores Prisma<br/>(implementan puertos)"]
-    Bull["BullMQ Producers"]
-    Cache["Redis Cache (TTL 60s)"]
-    JwtImpl["Passport-JWT, Guards"]
+  subgraph Infrastructure["Infrastructure"]
+    PrismaRepos["Prisma Repositories"]
+    BullProducers["BullMQ Producers"]
+    BullWorker["BullMQ Worker"]
+    RedisCache["Redis Cache"]
+    DockerRunner["Docker Runner Adapter"]
+    AiAdapter["AI Recommendation Adapter"]
+    JwtGuards["JWT Guards / Roles Guards"]
+    PG[("PostgreSQL")]
+    Redis[("Redis")]
   end
 
-  Ctrl --> UC
+  AuthCtrl --> AuthUC
+  CoursesCtrl --> CoursesUC
+  ChallengesCtrl --> ChallengesUC
+  SubmissionsCtrl --> SubmissionsUC
+  EvaluationsCtrl --> EvaluationsUC
   ReportsCtrl --> ReportsUC
+  AiCtrl --> AiUC
+  SupportCtrl --> CoursesUC
+  SupportCtrl --> ChallengesUC
 
-  UC --> Ports
-  ReportsUC --> PrismaR
-  ReportsUC --> Cache
+  AuthCtrl --> JwtGuards
+  CoursesCtrl --> JwtGuards
+  ChallengesCtrl --> JwtGuards
+  SubmissionsCtrl --> JwtGuards
+  EvaluationsCtrl --> JwtGuards
+  ReportsCtrl --> JwtGuards
+  AiCtrl --> JwtGuards
 
-  PrismaR -.implements.-> Ports
+  AuthUC --> Entities
+  CoursesUC --> Entities
+  ChallengesUC --> Entities
+  SubmissionsUC --> Entities
+  EvaluationsUC --> Entities
+  ReportsUC --> Entities
+  AiUC --> Entities
 
-  UC --> Ent
-  UC --> Bull
+  AuthUC --> Ports
+  CoursesUC --> Ports
+  ChallengesUC --> Ports
+  SubmissionsUC --> Ports
+  EvaluationsUC --> Ports
+  AiUC --> Ports
 
-  Ctrl --> JwtImpl
+  Ports -.implemented by.-> PrismaRepos
+  PrismaRepos --> PG
 
-  PrismaR --> PG[("Prisma -> Postgres")]
+  SubmissionsUC -->|enqueue job| BullProducers
+  BullProducers --> Redis
+  Redis --> BullWorker
+
+  BullWorker -->|load context and persist result| PrismaRepos
+  BullWorker -->|execute isolated SQL| DockerRunner
+  BullWorker -->|generate recommendation| AiAdapter
+  AiAdapter --> AiUC
+
+  ReportsUC -->|read/write TTL corto| RedisCache
+  ReportsUC -->|query persisted submissions| PrismaRepos
+  RedisCache --> Redis
+
+  DockerRunner --> Runner["Runner SQL Docker<br/>PostgreSQL temporal"]
 ```
 
 ### Reglas de dependencia
 
-- `domain` no depende de NADIE (sin imports de Nest, Prisma, etc.).
-- `application` puede depender de `domain` y de DTOs/utilities.
-- `infrastructure` implementa puertos de `domain` y orquesta clientes externos.
-- `presentation` depende de `application`. NO toca repositorios ni Prisma directo.
+- `domain` no depende de NestJS, Prisma, BullMQ, Redis ni Docker.
+- `application` orquesta casos de uso y depende de abstracciones del dominio.
+- `infrastructure` implementa persistencia, colas, cache, runner, guardas JWT y adaptadores externos.
+- `presentation` expone controladores HTTP, DTOs, Swagger y guardas.
+- El modulo de submissions encola trabajos en BullMQ.
+- El worker consume trabajos, usa el runner aislado y consulta el asistente IA.
+- Reports calcula metricas desde datos persistidos y usa Redis Cache para consultas pesadas.
 
-Cualquier import "hacia adentro" (`presentation → infrastructure`, `application → infrastructure`)
-es un **smell** y debe revisarse en PR.
-
-### Puertos recomendados para Entrega 2
-
-Para mantener el desacoplamiento entre aplicación e infraestructura,
-los componentes nuevos deben exponerse mediante puertos del dominio o de aplicación.
-
-Puertos sugeridos:
-
-- `SubmissionRepository`: persistencia de submissions y resultados.
-- `SubmissionQueuePort`: publicación de trabajos en BullMQ.
-- `SqlRunnerPort`: ejecución aislada de consultas SQL.
-- `RecommendationServicePort`: generación de recomendaciones SQL.
-- `EvaluationRepository`: persistencia de evaluaciones y retos asociados.
-- `ExecutionMetricsRepository`: persistencia de métricas de ejecución.
-
-Reglas:
-- La capa de aplicación no debe conocer BullMQ directamente fuera del adaptador.
-- El Worker debe depender de puertos, no de implementaciones concretas.
-- El Runner debe exponerse como adaptador de infraestructura.
-- El servicio de recomendaciones debe poder cambiar entre reglas, IA generativa o enfoque híbrido sin afectar los casos de uso.
 ---
 
-## 4. Flujo end-to-end objetivo (entrega 2)
+## 5. Flujo end-to-end final
 
 ```mermaid
 sequenceDiagram
-  participant S as Student
-  participant API
-  participant R as Redis
-  participant W as Worker
-  participant Run as Runner SQL (Docker)
-  participant PG as Postgres
+  actor Professor as Profesor
+  actor Student as Estudiante
+  participant API as API NestJS
+  participant PG as PostgreSQL principal
+  participant RB as Redis / BullMQ
+  participant Worker as Worker SQL
+  participant Runner as Runner SQL Docker
+  participant AI as AI Assistant Service
+  participant Reports as Reports / Leaderboard
 
-  S->>API: POST /submissions {challengeId, query}
+  Professor->>API: Crear curso
+  API->>PG: INSERT Course
+
+  Professor->>API: Crear reto en draft
+  API->>PG: INSERT Challenge status=draft
+
+  Professor->>API: Cargar SchemaScript
+  API->>PG: UPSERT SchemaScript
+
+  Professor->>API: Cargar TestDataset
+  API->>PG: INSERT TestDataset
+
+  Professor->>API: Cargar ExpectedResult
+  API->>PG: UPSERT ExpectedResult
+
+  Professor->>API: Publicar reto
+  API->>PG: UPDATE Challenge status=published
+
+  Student->>API: Enviar submission
   API->>PG: INSERT Submission status=QUEUED
-  API->>R: enqueue submissionId
-  API-->>S: 202 Accepted
-  R-->>W: deliver job
-  W->>PG: UPDATE status=RUNNING
-  W->>Run: docker run --rm postgres:16
-  Run->>Run: aplicar SchemaScript + TestDataset
-  Run->>Run: ejecutar query del estudiante
-  Run-->>W: {result, timeMs}
-  W->>PG: UPDATE status, score, executionTimeMs
+  API->>RB: Enqueue submission job
+  API-->>Student: 202 Accepted
+
+  RB-->>Worker: Deliver job
+  Worker->>PG: UPDATE Submission status=RUNNING
+  Worker->>PG: Leer Challenge, SchemaScript, TestDataset, ExpectedResult
+
+  Worker->>Runner: Crear ambiente aislado
+  Runner->>Runner: Aplicar schema
+  Runner->>Runner: Cargar test dataset
+  Runner->>Runner: Ejecutar query del estudiante
+  Runner-->>Worker: SqlExecutionResult
+
+  Worker->>Worker: Comparar contra ExpectedResult
+  Worker->>Worker: Calcular score
+
+  Worker->>AI: Generar Recommendation
+  AI->>PG: Persistir Recommendation
+  AI-->>Worker: Resultado de recomendacion
+
+  Worker->>PG: Persistir status final, score, feedback y resultData
+
+  Reports->>PG: Leer submissions persistidos
+  Reports->>RB: Leer/escribir metricas cacheadas
+  Reports-->>API: Reportes y leaderboard
 ```
-
-En **Entrega 1** los pasos sombreados (`Run`) están stubeados.
-
-### Extensión del flujo para recomendaciones SQL
-
-Después de ejecutar la consulta del estudiante, el Worker debe solicitar
-recomendaciones al servicio de optimización SQL.
-
-Flujo adicional:
-
-1. El Worker recibe el resultado de ejecución del Runner.
-2. El Worker recopila:
-   - consulta enviada,
-   - esquema del reto,
-   - datos de rendimiento,
-   - estado de evaluación,
-   - posibles errores.
-3. El Worker invoca el `RecommendationServicePort`.
-4. El servicio de recomendaciones analiza la consulta.
-5. Se generan:
-   - explicación en lenguaje natural,
-   - sugerencia de índices,
-   - advertencias de malas prácticas,
-   - posible reescritura de la consulta.
-6. El Worker persiste el resultado final y las recomendaciones.
-
-
----
-
-## 5. Seguridad de ejecución SQL
-
-La ejecución de SQL enviado por estudiantes es el punto de mayor riesgo técnico
-del sistema. Por eso, debe tratarse como entrada no confiable.
-
-Reglas obligatorias:
-
-- Nunca ejecutar consultas de estudiantes desde la API HTTP.
-- Toda consulta debe pasar por cola, Worker y Runner aislado.
-- El runner nunca debe conectarse a la base principal `sqljudge`.
-- Solo se permiten consultas `SELECT` para evaluación automática.
-- Bloquear operaciones destructivas o administrativas:
-  - `DROP`
-  - `DELETE`
-  - `UPDATE`
-  - `ALTER`
-  - `TRUNCATE`
-  - `CREATE USER`
-  - `GRANT`
-  - `REVOKE`
-
-- Validar la consulta mediante parser SQL antes de enviarla al runner.
-- Aplicar límite de tiempo por ejecución.
-- Aplicar límites de CPU y memoria al contenedor.
-- Eliminar el ambiente temporal al finalizar la evaluación.
 
 ---
 
@@ -319,7 +415,13 @@ stateDiagram-v2
   draft --> published
   draft --> archived
   published --> archived
- ``` 
+```
+
+Reglas:
+
+- `draft`: reto editable, todavia no disponible para estudiantes.
+- `published`: reto disponible para submissions.
+- `archived`: reto cerrado para nuevas submissions.
 
 ---
 
@@ -335,35 +437,116 @@ stateDiagram-v2
   RUNNING --> TIME_LIMIT_EXCEEDED
   RUNNING --> RUNTIME_ERROR
   RUNNING --> OPTIMIZATION_REQUIRED
- ``` 
----
+```
 
-## 8. Decisiones arquitectónicas (ADR-condensado)
+Estados finales:
 
-| ID  | Decisión | Estado |
-|-----|-----------|---------|
-| 001 | NestJS sobre Express por familiaridad del equipo | Adoptado |
-| 002 | Prisma como ORM (en lugar de TypeORM) por type-safety y DX | Adoptado |
-| 003 | BullMQ para colas (en lugar de RabbitMQ) por simplicidad | Adoptado |
-| 004 | Clean Architecture por bounded context, no global | Adoptado |
-| 005 | JWT con par access+refresh (1h / 7d) | Adoptado |
-| 006 | DB separada `sqljudge_eval` para runner; nunca tocar la principal | Adoptado |
-| 007 | Migraciones aplicadas automáticamente al arrancar la API | Adoptado |
-| 008 | Solo se permiten consultas SELECT en evaluación automática | Adoptado |
-| 009 | Toda evaluación SQL será asíncrona vía Redis + BullMQ | Adoptado |
-| 010 | El sistema usará enfoque híbrido reglas + IA para recomendaciones | Adoptado |
-| 011 | Cada evaluación correrá en un ambiente efímero aislado | Adoptado |
-| 012 | El runner tendrá límites de CPU, memoria y tiempo | Adoptado |
-| 013 | Los resultados esperados se normalizarán antes de comparar | Propuesto |
-| 014 | Los reportes pesados se cachean en Redis con TTL de 60 segundos | Adoptado |
-| 015 | El leaderboard se calcula desde submissions persistidos, no desde datos temporales del runner | Adoptado |
-
-Si una decisión cambia, abrir PR a este archivo y notificar en daily.
+- `ACCEPTED`: resultado correcto.
+- `WRONG_ANSWER`: la query ejecuta, pero no coincide con `ExpectedResult`.
+- `SYNTAX_ERROR`: error de sintaxis SQL.
+- `TIME_LIMIT_EXCEEDED`: supero el limite de tiempo configurado.
+- `RUNTIME_ERROR`: error de ejecucion o fallo del runner.
+- `OPTIMIZATION_REQUIRED`: la respuesta puede ser correcta, pero requiere mejoras relevantes detectadas por el asistente.
 
 ---
 
-## 9. Diagramas exportables
+## 8. Seguridad de ejecucion SQL
 
-Los diagramas Mermaid se renderizan directamente en GitHub. Si Dayana necesita
-PNG/draw.io para el PDF de entrega, exportar desde
-<https://mermaid.live> o desde la extensión de VS Code.
+La ejecucion de SQL de estudiantes se considera entrada no confiable.
+
+Reglas obligatorias:
+
+- La API HTTP nunca ejecuta SQL de estudiantes.
+- La base principal `sqljudge` nunca ejecuta SQL de estudiantes.
+- Toda submission entra por cola y se procesa de forma asincrona.
+- El worker crea un ambiente Docker temporal para cada evaluacion.
+- El runner aplica schema y test data en una base temporal.
+- El runner ejecuta solo consultas permitidas y con timeout.
+- El contenedor del runner se destruye al finalizar, incluso ante error.
+- El runner usa limites de CPU, memoria y tiempo.
+- Se bloquean operaciones destructivas o administrativas como `DROP`, `DELETE`, `UPDATE`, `ALTER`, `TRUNCATE`, `GRANT` y `REVOKE`.
+- Los resultados se comparan contra `ExpectedResult`, no contra consultas ejecutadas en la base principal.
+
+---
+
+## 9. Diagrama de reportes
+
+```mermaid
+flowchart TB
+  ReportsController["ReportsController"]
+  ReportsService["ReportsService"]
+  RedisCache[("Redis Cache<br/>TTL corto")]
+  Prisma["Prisma"]
+  PostgreSQL[("PostgreSQL principal")]
+
+  StudentReport["Reporte por estudiante"]
+  ChallengeReport["Reporte por reto"]
+  CourseReport["Reporte por curso"]
+  Leaderboard["Leaderboard"]
+
+  ReportsController --> ReportsService
+
+  ReportsService -->|read/write cache| RedisCache
+  ReportsService -->|cache miss / datos base| Prisma
+  Prisma --> PostgreSQL
+
+  ReportsService --> StudentReport
+  ReportsService --> ChallengeReport
+  ReportsService --> CourseReport
+  ReportsService --> Leaderboard
+```
+
+Los reportes y leaderboard se calculan desde submissions persistidos. Redis se usa como cache de TTL corto para evitar recomputar consultas pesadas de forma innecesaria.
+
+---
+
+## 10. Diagrama de AI Assistant
+
+```mermaid
+flowchart TB
+  Worker["Worker SQL"]
+  AiService["AiAssistantService"]
+  RuleEngine["RuleEngine"]
+  LlmClient["LlmClient<br/>opcional/stub"]
+  Builder["RecommendationBuilder"]
+  Repo["RecommendationRepository"]
+  PostgreSQL[("PostgreSQL principal")]
+
+  Worker --> AiService
+  AiService --> RuleEngine
+  AiService --> LlmClient
+  AiService --> Builder
+  RuleEngine --> Builder
+  LlmClient --> Builder
+  Builder --> Repo
+  Repo --> PostgreSQL
+```
+
+El asistente usa un enfoque hibrido: reglas deterministicas para detectar patrones conocidos y un cliente LLM opcional o stub para enriquecer la explicacion. Las recomendaciones se persisten como entidad separada.
+
+---
+
+## 11. Decisiones arquitectonicas
+
+| ID | Decision | Estado |
+|----|----------|--------|
+| ADR-001 | NestJS como framework backend principal por modularidad, DI y soporte para arquitectura por capas. | Adoptada |
+| ADR-002 | Prisma como ORM para type-safety, migraciones y claridad del modelo relacional. | Adoptada |
+| ADR-003 | PostgreSQL como base principal para persistencia transaccional. | Adoptada |
+| ADR-004 | Redis como infraestructura compartida para BullMQ y cache de reportes. | Adoptada |
+| ADR-005 | JWT y guards por roles para autenticacion y autorizacion HTTP. | Adoptada |
+| ADR-006 | Clean Architecture por modulo para separar presentation, application, domain e infrastructure. | Adoptada |
+| ADR-007 | La base principal no ejecuta SQL de estudiantes. | Adoptada |
+| ADR-008 | Runner SQL en Docker para aislamiento de ejecucion. | Adoptada |
+| ADR-009 | Evaluacion asincrona con BullMQ para desacoplar API y ejecucion SQL. | Adoptada |
+| ADR-010 | ExpectedResult separado para comparacion deterministica. | Adoptada |
+| ADR-011 | IA hibrida basada en reglas y cliente LLM opcional/stub. | Adoptada |
+| ADR-012 | Recommendations persistidas como entidad separada. | Adoptada |
+| ADR-013 | Leaderboard calculado desde submissions persistidos. | Adoptada |
+| ADR-014 | Reportes pesados cacheados en Redis con TTL corto. | Adoptada |
+| ADR-015 | Worker independiente en `worker/src` para procesar submissions y operar el runner. | Adoptada |
+| ADR-016 | Runner con limites de CPU, memoria y tiempo para controlar riesgo operativo. | Adoptada |
+
+Si una decision cambia, se debe actualizar este documento y el ADR correspondiente antes de mergear.
+
+---
