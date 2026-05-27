@@ -1,22 +1,29 @@
 /**
  * ============================================================
- * Worker SQL — Runner REAL con Docker (Entrega 2)
+ * Worker SQL — Entrega 2 (stub-evaluator, pre-runner)
  * ============================================================
- * Consume submissions de la cola Redis (BullMQ).
- * Por cada submission:
  *
- * 1. ✅ Obtiene datos: Challenge (schema, seed, expectedResult)
- * 2. 🐳 Crea contenedor PostgreSQL temporal
- * 3. ⏳ Espera a que PostgreSQL esté listo (TCP + health check)
- * 4. 🔧 Ejecuta: DDL + Seed + Query del estudiante
- * 5. 📊 Compara resultados vs expectedResult
- * 6. 📈 Calcula score (60% correctness + 15% time + 10% practices)
- * 7. 💾 Guarda resultados en DB
- * 8. 🧹 Destruye contenedor (siempre, incluso en error)
+ * Consume de la cola "submissions" en Redis. Mantiene la
+ * estructura del Entregable 1 (BullMQ + Prisma) pero ya invoca
+ * el comparador y el scoring real implementados por Ruiz, para
+ * que el resto del equipo pueda probar el flujo end-to-end antes
+ * de que Jose conecte el Runner SQL en Docker.
  *
- * Ejecución:
- *   npm run worker:dev     (desarrollo local con ts-node)
- *   docker compose up worker  (producción)
+ * Lo que ESTE archivo deja para Jose:
+ *   1) Reemplazar `runQueryStub` por `DockerRunnerService.run(...)`
+ *      con el contrato compartido `RunnerResult` (sección 5.2 del
+ *      Plan_Entregable2): { status, executionTimeMs, rows, columns,
+ *      errorMessage, explainPlan }.
+ *   2) Manejar SYNTAX_ERROR / RUNTIME_ERROR / TIME_LIMIT_EXCEEDED
+ *      según lo que devuelva el runner.
+ *
+ * Lo que ESTE archivo deja para Pardo:
+ *   - El paso "ai recommendation" está marcado con TODO. Cuando
+ *     el módulo ai-assistant esté listo, llamarlo aquí entre la
+ *     comparación y el cálculo de score.
+ *
+ * Ejecutar local:    npm run worker:dev
+ * Ejecutar Docker:   docker compose up worker
  * ============================================================
  */
 

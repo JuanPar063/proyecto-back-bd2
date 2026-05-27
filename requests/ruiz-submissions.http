@@ -1,0 +1,225 @@
+### -----------------------------------------------------------------------
+### Colección REST — flujos del módulo SUBMISSIONS (Entrega 2)
+### Responsable: Ruiz Akle, Juan.
+### Cubre: cargar resultado esperado, enviar query, polling, filtros.
+### Compatible con VS Code REST Client e importable a Postman.
+###
+### Cómo usar:
+###   1) docker compose up -d
+###   2) Ejecutar ruiz-flows.http hasta dejar un reto publicado con
+###      esquema + dataset (sección 3 de ese archivo).
+###   3) Hacer login en este archivo (sección 1) y rellenar tokens.
+###   4) Cargar el resultado esperado (sección 2).
+###   5) Probar los flujos de envío y polling (secciones 3-6).
+### -----------------------------------------------------------------------
+
+@host = http://localhost:3000/api
+
+@adminToken = REEMPLAZAR_ADMIN_TOKEN
+@profToken  = REEMPLAZAR_PROFESSOR_TOKEN
+@studToken  = REEMPLAZAR_STUDENT_TOKEN
+
+@profId       = REEMPLAZAR_PROFESSOR_ID
+@studId       = REEMPLAZAR_STUDENT_ID
+@challengeId  = REEMPLAZAR_CHALLENGE_ID
+@submissionId = REEMPLAZAR_SUBMISSION_ID
+
+### =======================================================================
+### 1. AUTH — login
+### =======================================================================
+
+### 1.1 Login PROFESSOR (mismo seed de ruiz-flows.http)
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "prof.demo@sqljudge.local",
+  "password": "Profe123!"
+}
+
+### 1.2 Login STUDENT
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "stud.demo@sqljudge.local",
+  "password": "Stud123!"
+}
+
+### =======================================================================
+### 2. EXPECTED RESULT — el profesor carga el resultado de referencia
+###    (requisito para que el reto pueda recibir envíos)
+### =======================================================================
+
+### 2.1 Upsert: clientes con > 3 compras (ejemplo del reto del demo)
+PUT {{host}}/challenges/{{challengeId}}/expected-result
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "columns": ["name", "total"],
+  "rows": [
+    ["Ana",   8],
+    ["Beto",  6],
+    ["Carla", 4]
+  ],
+  "orderSensitive": false,
+  "floatTolerance": 0
+}
+
+### 2.2 GET — consultar lo que quedó cargado
+GET {{host}}/challenges/{{challengeId}}/expected-result
+Authorization: Bearer {{profToken}}
+
+### 2.3 ERROR — fila con cardinalidad incorrecta → 400
+PUT {{host}}/challenges/{{challengeId}}/expected-result
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "columns": ["name", "total"],
+  "rows": [["Ana", 8, "extra"]]
+}
+
+### 2.4 ERROR — columnas duplicadas (case-insensitive) → 400
+PUT {{host}}/challenges/{{challengeId}}/expected-result
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{
+  "columns": ["Name", "name"],
+  "rows": [["Ana", "Beto"]]
+}
+
+### =======================================================================
+### 3. SUBMISSION — el estudiante envía su query (variante REST-ish)
+### =======================================================================
+
+### 3.1 Envío feliz — el stub del worker devuelve exactamente lo esperado
+###     y el comparador lo marca ACCEPTED.
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{
+  "query": "SELECT c.name, COUNT(o.id) AS total FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.name HAVING COUNT(o.id) > 3"
+}
+
+### 3.2 Envío forzado a WRONG_ANSWER (marcador en comentario, soportado por el stub)
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{
+  "query": "SELECT c.name, COUNT(o.id) AS total /* expect:WRONG */ FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.name"
+}
+
+### 3.3 Envío forzado a TIME_LIMIT_EXCEEDED
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{
+  "query": "SELECT 1 /* expect:TIMEOUT */"
+}
+
+### 3.4 Envío forzado a SYNTAX_ERROR
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{
+  "query": "SELECT 1 /* expect:SYNTAX */"
+}
+
+### 3.5 Envío forzado a RUNTIME_ERROR
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{
+  "query": "SELECT 1 /* expect:RUNTIME */"
+}
+
+### =======================================================================
+### 4. SUBMISSION — variante legacy con challengeId en el body
+### =======================================================================
+
+### 4.1 POST /submissions (compatibilidad con clientes existentes)
+POST {{host}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{
+  "challengeId": "{{challengeId}}",
+  "query": "SELECT c.name, COUNT(o.id) AS total FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.name HAVING COUNT(o.id) > 3"
+}
+
+### =======================================================================
+### 5. POLLING / DETALLE / LISTADOS
+### =======================================================================
+
+### 5.1 Polling: el estudiante consulta el resultado de su submission
+GET {{host}}/submissions/{{submissionId}}
+Authorization: Bearer {{studToken}}
+
+### 5.2 Detalle (PROFESSOR — dueño del reto)
+GET {{host}}/submissions/{{submissionId}}
+Authorization: Bearer {{profToken}}
+
+### 5.3 Mis submissions (STUDENT, hasta 50 más recientes)
+GET {{host}}/submissions/my
+Authorization: Bearer {{studToken}}
+
+### 5.4 Listar con filtros (STUDENT) — ignora studentId distinto del propio
+GET {{host}}/submissions?challengeId={{challengeId}}&limit=20
+Authorization: Bearer {{studToken}}
+
+### 5.5 Listar con filtros (PROFESSOR) — solo retos suyos
+GET {{host}}/submissions?challengeId={{challengeId}}&studentId={{studId}}
+Authorization: Bearer {{profToken}}
+
+### 5.6 Atajo PROFESSOR — submissions de un reto ordenadas por score
+GET {{host}}/submissions/challenge/{{challengeId}}
+Authorization: Bearer {{profToken}}
+
+### =======================================================================
+### 6. CASOS BORDE / VALIDACIONES (deben fallar con 400/403/404)
+### =======================================================================
+
+### 6.1 Query no SELECT → 400
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{ "query": "DELETE FROM customers WHERE id > 0" }
+
+### 6.2 Query con DDL escondido → 400
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer {{studToken}}
+Content-Type: application/json
+
+{ "query": "SELECT * FROM customers; DROP TABLE orders;" }
+
+### 6.3 STUDENT pide submission ajena → 404 (no leakea existencia)
+GET {{host}}/submissions/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{studToken}}
+
+### 6.4 STUDENT pasa studentId de otro usuario → se ignora silenciosamente
+GET {{host}}/submissions?studentId=00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{studToken}}
+
+### 6.5 PROFESSOR intenta cargar expected en reto ajeno → 403
+PUT {{host}}/challenges/00000000-0000-0000-0000-000000000000/expected-result
+Authorization: Bearer {{profToken}}
+Content-Type: application/json
+
+{ "columns": ["x"], "rows": [[1]] }
+
+### 6.6 STUDENT no inscrito intenta enviar → 404 (no leakea el reto)
+###     (requiere un STUDENT de otro curso para verificarlo en demo)
+POST {{host}}/challenges/{{challengeId}}/submissions
+Authorization: Bearer REEMPLAZAR_OTRO_STUDENT_TOKEN
+Content-Type: application/json
+
+{ "query": "SELECT 1 /* sanity */ FROM customers" }

@@ -158,30 +158,45 @@ se propone extender el modelo con las siguientes entidades en Entrega 2:
 
 ```mermaid
 flowchart TB
+
   subgraph Presentation
     Ctrl["REST Controllers<br/>(@Controller / DTOs / Swagger)"]
+    ReportsCtrl["Reports Controller"]
   end
+
   subgraph Application
     UC["Use cases / Services<br/>(orquestan dominio)"]
+    ReportsUC["Reports Use Cases"]
     DTOS["DTOs (validación)"]
   end
+
   subgraph Domain
     Ent["Entidades + Value Objects"]
     Ports["Puertos (interfaces)<br/>USER_REPOSITORY, ..."]
     DomEx["DomainException"]
   end
+
   subgraph Infrastructure
     PrismaR["Adaptadores Prisma<br/>(implementan puertos)"]
     Bull["BullMQ Producers"]
+    Cache["Redis Cache (TTL 60s)"]
     JwtImpl["Passport-JWT, Guards"]
   end
 
   Ctrl --> UC
+  ReportsCtrl --> ReportsUC
+
   UC --> Ports
+  ReportsUC --> PrismaR
+  ReportsUC --> Cache
+
   PrismaR -.implements.-> Ports
+
   UC --> Ent
   UC --> Bull
+
   Ctrl --> JwtImpl
+
   PrismaR --> PG[("Prisma -> Postgres")]
 ```
 
@@ -340,6 +355,8 @@ stateDiagram-v2
 | 011 | Cada evaluación correrá en un ambiente efímero aislado | Adoptado |
 | 012 | El runner tendrá límites de CPU, memoria y tiempo | Adoptado |
 | 013 | Los resultados esperados se normalizarán antes de comparar | Propuesto |
+| 014 | Los reportes pesados se cachean en Redis con TTL de 60 segundos | Adoptado |
+| 015 | El leaderboard se calcula desde submissions persistidos, no desde datos temporales del runner | Adoptado |
 
 Si una decisión cambia, abrir PR a este archivo y notificar en daily.
 

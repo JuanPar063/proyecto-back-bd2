@@ -13,6 +13,7 @@ import { SubmissionsModule } from './modules/submissions/submissions.module';
 import { DemoModule } from './modules/demo/demo.module';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigService } from '@nestjs/config';
+import { ReportsModule } from './modules/reports/reports.module';
 
 @Module({
   imports: [
