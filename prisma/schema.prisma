@@ -114,6 +114,7 @@ model Challenge {
   status         ChallengeStatus @default(draft)
   courseId       String
   createdById    String
+  expectedResult Json?           // Resultado esperado en formato JSON (array de objetos)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
