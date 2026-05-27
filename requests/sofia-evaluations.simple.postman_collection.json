@@ -1,0 +1,584 @@
+{
+  "info": {
+    "_postman_id": "d8f1d4c4-0f36-4e40-8fe5-44fbc83e7a45",
+    "name": "SQL Judge - Sofia Evaluations Flow Simple",
+    "description": "Coleccion Postman del modulo de Evaluaciones / parciales. Cubre login, CRUD de evaluaciones, asociacion ordenada de retos, flujo de estudiante, inicio de intento, submission con evaluationId y estado de evaluacion.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "host",
+      "value": "http://localhost:3000/api"
+    },
+    {
+      "key": "profEmail",
+      "value": "prof.demo@sqljudge.local"
+    },
+    {
+      "key": "profPassword",
+      "value": "Profe123!"
+    },
+    {
+      "key": "studentEmail",
+      "value": "stud.demo@sqljudge.local"
+    },
+    {
+      "key": "studentPassword",
+      "value": "Stud123!"
+    },
+    {
+      "key": "profToken",
+      "value": "REEMPLAZAR_O_EJECUTAR_LOGIN_PROFESSOR"
+    },
+    {
+      "key": "studentToken",
+      "value": "REEMPLAZAR_O_EJECUTAR_LOGIN_STUDENT"
+    },
+    {
+      "key": "courseId",
+      "value": "REEMPLAZAR_COURSE_ID"
+    },
+    {
+      "key": "challengeId",
+      "value": "REEMPLAZAR_CHALLENGE_ID"
+    },
+    {
+      "key": "evaluationId",
+      "value": "SE_AUTOLLENA_AL_CREAR_EVALUACION"
+    },
+    {
+      "key": "attemptId",
+      "value": "SE_AUTOLLENA_AL_INICIAR_EVALUACION"
+    },
+    {
+      "key": "submissionId",
+      "value": "SE_AUTOLLENA_AL_ENVIAR_SUBMISSION"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Auth",
+      "item": [
+        {
+          "name": "Login PROFESSOR",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login professor 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('profToken', json.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{profEmail}}\",\n  \"password\": \"{{profPassword}}\"\n}"
+            },
+            "url": "{{host}}/auth/login"
+          }
+        },
+        {
+          "name": "Login STUDENT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('login student 200', function () { pm.response.to.have.status(200); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('studentToken', json.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{studentEmail}}\",\n  \"password\": \"{{studentPassword}}\"\n}"
+            },
+            "url": "{{host}}/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 Professor - Evaluations CRUD",
+      "item": [
+        {
+          "name": "Create evaluation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('evaluation created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('evaluationId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Parcial 1 - Consultas SQL\",\n  \"description\": \"Evaluacion de joins, filtros y agregaciones.\",\n  \"courseId\": \"{{courseId}}\",\n  \"startDate\": \"2026-05-26T00:00:00.000Z\",\n  \"endDate\": \"2026-12-31T23:59:59.000Z\",\n  \"durationMinutes\": 90,\n  \"maxAttempts\": 2,\n  \"resultsVisibility\": \"AFTER_END\"\n}"
+            },
+            "url": "{{host}}/evaluations"
+          }
+        },
+        {
+          "name": "List evaluations as PROFESSOR",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{host}}/evaluations"
+          }
+        },
+        {
+          "name": "Get evaluation detail",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{host}}/evaluations/{{evaluationId}}"
+          }
+        },
+        {
+          "name": "Update evaluation",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Evaluacion actualizada desde Postman.\",\n  \"resultsVisibility\": \"ALWAYS\"\n}"
+            },
+            "url": "{{host}}/evaluations/{{evaluationId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 Professor - Challenges in evaluation",
+      "item": [
+        {
+          "name": "Set ordered challenge list",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeIds\": [\n    \"{{challengeId}}\"\n  ]\n}"
+            },
+            "url": "{{host}}/evaluations/{{evaluationId}}/challenges"
+          }
+        },
+        {
+          "name": "Error - duplicate challenge IDs",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeIds\": [\n    \"{{challengeId}}\",\n    \"{{challengeId}}\"\n  ]\n}"
+            },
+            "url": "{{host}}/evaluations/{{evaluationId}}/challenges"
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 Student flow",
+      "item": [
+        {
+          "name": "List evaluations as STUDENT",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{host}}/evaluations"
+          }
+        },
+        {
+          "name": "Start evaluation attempt",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('attempt created or active attempt returned', function () { pm.expect([200, 201]).to.include(pm.response.code); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('attemptId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": "{{host}}/evaluations/{{evaluationId}}/start"
+          }
+        },
+        {
+          "name": "Get evaluation state",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{host}}/evaluations/{{evaluationId}}/state"
+          }
+        },
+        {
+          "name": "Submit challenge inside evaluation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('submission accepted by API queue', function () { pm.response.to.have.status(202); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('submissionId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"SELECT c.name, COUNT(o.id) AS total FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY c.name HAVING COUNT(o.id) > 3\",\n  \"evaluationId\": \"{{evaluationId}}\"\n}"
+            },
+            "url": "{{host}}/challenges/{{challengeId}}/submissions"
+          }
+        },
+        {
+          "name": "Get submission detail",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": "{{host}}/submissions/{{submissionId}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 Error cases",
+      "item": [
+        {
+          "name": "Create future evaluation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('future evaluation created', function () { pm.response.to.have.status(201); });",
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('futureEvaluationId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Parcial futuro - debe bloquear start\",\n  \"description\": \"Caso negativo para ventana de fechas.\",\n  \"courseId\": \"{{courseId}}\",\n  \"startDate\": \"2099-01-01T00:00:00.000Z\",\n  \"endDate\": \"2099-01-01T02:00:00.000Z\",\n  \"durationMinutes\": 60,\n  \"maxAttempts\": 1,\n  \"resultsVisibility\": \"AFTER_END\"\n}"
+            },
+            "url": "{{host}}/evaluations"
+          }
+        },
+        {
+          "name": "Set challenge on future evaluation",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"challengeIds\": [\"{{challengeId}}\"]\n}"
+            },
+            "url": "{{host}}/evaluations/{{futureEvaluationId}}/challenges"
+          }
+        },
+        {
+          "name": "Error - start outside date window",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('start blocked by date window', function () { pm.response.to.have.status(400); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": "{{host}}/evaluations/{{futureEvaluationId}}/start"
+          }
+        },
+        {
+          "name": "Error - submit with evaluationId before start",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('submission blocked before active attempt', function () { pm.expect([400, 404]).to.include(pm.response.code); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{studentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"SELECT 1\",\n  \"evaluationId\": \"{{futureEvaluationId}}\"\n}"
+            },
+            "url": "{{host}}/challenges/{{challengeId}}/submissions"
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 Cleanup optional",
+      "item": [
+        {
+          "name": "Delete evaluation",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{profToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": "{{host}}/evaluations/{{evaluationId}}"
+          }
+        }
+      ]
+    }
+  ]
+}
