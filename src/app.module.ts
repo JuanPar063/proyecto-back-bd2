@@ -30,7 +30,6 @@ import { ReportsModule } from './modules/reports/reports.module';
     SchemasModule,
     TestDataModule,
     SubmissionsModule,
-    ReportsModule,
     DemoModule,
     BullModule.forRootAsync({
       imports: [ConfigModule],
