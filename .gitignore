@@ -34,3 +34,9 @@ logs/
 
 # Docker volumes (si usas binds locales)
 docker/data/
+
+# Skills instaladas localmente por `npx skills add` (si alguien las pone dentro del repo)
+.agents/
+.skills/
+.claude-skills/
+skills/local/

@@ -196,6 +196,33 @@ const worker = new Worker<SubmissionJobData>(
           aiQualityScore = (ai['qualityScore'] as typeof aiQualityScore) ?? null;
           aiWarnings = (ai['warnings'] as typeof aiWarnings) ?? [];
           mainLogger.info(`Asistente IA respondió ✓ (${aiWarnings.length} warning(s))`);
+
+          // Persistir la Recommendation para que el frontend pueda mostrarla
+          // como "análisis histórico" en /dashboard/ai (modo Histórico).
+          // Calculamos la severidad máxima de las warnings para indexar la tabla.
+          try {
+            const severities = aiWarnings.map((w) => w.severity);
+            const highest: 'info' | 'warning' | 'critical' = severities.includes('critical')
+              ? 'critical'
+              : severities.includes('warning')
+                ? 'warning'
+                : 'info';
+            await prisma.recommendation.create({
+              data: {
+                submissionId,
+                explanation: String(ai['explanation'] ?? ''),
+                suggestedIndexes: (ai['suggestedIndexes'] as string[]) ?? [],
+                rewriteSql: (ai['rewriteSql'] as string | null) ?? null,
+                warnings: aiWarnings as any,
+                impact: String(ai['impact'] ?? ''),
+                highestSeverity: highest as any,
+                qualityScore: (aiQualityScore as any) ?? undefined,
+              },
+            });
+            mainLogger.info('Recommendation persistida ✓');
+          } catch (persistErr: any) {
+            mainLogger.warn(`No se pudo persistir Recommendation: ${persistErr.message}`);
+          }
         } else {
           mainLogger.warn(`Asistente IA respondió ${resp.status} — continuando sin IA`);
         }

@@ -21,6 +21,16 @@
     background-color: hsl(14 100% 57% / 0.35);
     color: hsl(0 0% 98%);
   }
+
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active {
+    -webkit-text-fill-color: hsl(0 0% 98%);
+    -webkit-box-shadow: 0 0 0 1000px hsl(0 0% 6%) inset;
+    caret-color: hsl(0 0% 98%);
+    transition: background-color 9999s ease-in-out 0s;
+  }
 }
 
 @layer utilities {
